@@ -165,6 +165,33 @@ class SoundEngine {
     });
   }
 
+  public playFootstep() {
+    this.init();
+    if (!this.ctx || this.isMuted) return;
+
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(80, now);
+    osc.frequency.exponentialRampToValueAtTime(30, now + 0.08);
+
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(250, now);
+
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.005, now + 0.08);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.ctx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.08);
+  }
+
   public toggleMute() {
     this.isMuted = !this.isMuted;
     return this.isMuted;

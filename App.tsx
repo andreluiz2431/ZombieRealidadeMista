@@ -9,6 +9,7 @@ import { GameStatus, PlayerWorldPos, ZombieData, HouseData, RemotePlayer, GPSCoo
 import { useMediaPipe } from './hooks/useMediaPipe';
 import { useFullscreen } from './hooks/useFullscreen';
 import { useGyroscope } from './hooks/useGyroscope';
+import { useAccelerometerMovement } from './hooks/useAccelerometerMovement';
 import GameScene from './components/GameScene';
 import WebcamPreview from './components/WebcamPreview';
 import { RadarHUD } from './components/RadarHUD';
@@ -36,7 +37,9 @@ import {
   RefreshCw,
   Glasses,
   Camera,
-  SwitchCamera
+  SwitchCamera,
+  Footprints,
+  Activity
 } from 'lucide-react';
 
 // Default Safe House Shelters around origin
@@ -124,6 +127,32 @@ export const App: React.FC = () => {
     calibrateGyro
   } = useGyroscope();
 
+  // Movement Mode State ('accelerometer' or 'gps')
+  const [movementMode, setMovementMode] = useState<'accelerometer' | 'gps'>('accelerometer');
+
+  // Accelerometer step movement handler
+  const handleAccelerometerStep = useCallback(({ dx, dz }: { dx: number; dz: number }) => {
+    setPlayerPos((prev) => ({
+      x: prev.x + dx,
+      y: prev.y,
+      z: prev.z + dz
+    }));
+    soundEngine.playFootstep();
+  }, []);
+
+  const {
+    stepCount,
+    isMotionSupported,
+    hasMotionPermission,
+    requestMotionPermission,
+    triggerForwardStep
+  } = useAccelerometerMovement({
+    enabled: movementMode === 'accelerometer',
+    gameStatus,
+    cameraQuaternionRef,
+    onStep: handleAccelerometerStep
+  });
+
   // -------------------------------------------------------------
   // 1. GPS Tracking System
   // -------------------------------------------------------------
@@ -156,8 +185,8 @@ export const App: React.FC = () => {
           return prev;
         });
 
-        // Update player world position if origin exists and not in manual override
-        if (originGps && !useVirtualGps) {
+        // Update player world position if origin exists, not in manual override, and in GPS mode
+        if (originGps && !useVirtualGps && movementMode === 'gps') {
           const wPos = gpsToWorldCoords(originGps.lat, originGps.lng, coords.latitude, coords.longitude);
           setPlayerPos(wPos);
         }
@@ -175,7 +204,7 @@ export const App: React.FC = () => {
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [originGps, useVirtualGps]);
+  }, [originGps, useVirtualGps, movementMode]);
 
   // Keyboard / Virtual Joystick movement for indoor or testing play
   useEffect(() => {
@@ -407,8 +436,9 @@ export const App: React.FC = () => {
   const startGame = async () => {
     if (!isCameraReady) return;
 
-    // Request iOS Gyroscope permissions if applicable
+    // Request iOS Gyroscope & Motion permissions if applicable
     await requestGyroPermission();
+    await requestMotionPermission();
 
     // Auto request fullscreen if available and not yet active
     if (!isFullscreen && isFullscreenSupported) {
@@ -597,22 +627,39 @@ export const App: React.FC = () => {
                 zombies={zombies}
                 houses={houses}
                 remotePlayers={remotePlayers}
+                cameraQuaternionRef={cameraQuaternionRef}
               />
 
-              {/* GPS Position Box */}
-              <div className="bg-slate-950/80 px-3 py-1.5 rounded-lg border border-slate-800 text-[10px] text-slate-300 font-mono flex items-center gap-1.5">
-                <MapPin className="w-3 h-3 text-emerald-400" />
-                <span>
-                  GPS: {playerPos.x.toFixed(1)}m, {playerPos.z.toFixed(1)}m
-                </span>
-                <button
-                  onClick={calibrateGpsOrigin}
-                  className="pointer-events-auto ml-1 text-slate-400 hover:text-white underline"
-                  title="Recalibrar Origem GPS"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                </button>
-              </div>
+              {/* Movement Mode Status Box */}
+              {movementMode === 'accelerometer' ? (
+                <div className="bg-slate-950/80 px-3 py-1.5 rounded-lg border border-amber-500/40 text-[10px] text-amber-300 font-mono flex items-center justify-between gap-2 shadow-[0_0_10px_rgba(245,158,11,0.2)]">
+                  <div className="flex items-center gap-1.5">
+                    <Footprints className="w-3.5 h-3.5 text-amber-400 animate-pulse shrink-0" />
+                    <span>Passos: <strong>{stepCount}</strong></span>
+                  </div>
+                  <button
+                    onClick={() => triggerForwardStep(1.0)}
+                    className="pointer-events-auto px-2 py-0.5 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded text-[10px] active:scale-95 transition-all shadow-sm flex items-center gap-1 shrink-0"
+                    title="Avançar 1 metro manualmente com o acelerômetro"
+                  >
+                    <span>Avançar (+1m)</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-slate-950/80 px-3 py-1.5 rounded-lg border border-slate-800 text-[10px] text-slate-300 font-mono flex items-center gap-1.5">
+                  <MapPin className="w-3 h-3 text-emerald-400" />
+                  <span>
+                    GPS: {playerPos.x.toFixed(1)}m, {playerPos.z.toFixed(1)}m
+                  </span>
+                  <button
+                    onClick={calibrateGpsOrigin}
+                    className="pointer-events-auto ml-1 text-slate-400 hover:text-white underline"
+                    title="Recalibrar Origem GPS"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -820,6 +867,53 @@ export const App: React.FC = () => {
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
                   </button>
+                </div>
+              </div>
+
+              {/* Player Movement Mode Option (Acelerômetro vs GPS) */}
+              <div className="flex flex-col gap-1.5 pt-1.5 border-t border-slate-800/80">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                    <Footprints className="w-4 h-4 text-amber-400" />
+                    <span>Modo de Deslocamento:</span>
+                  </div>
+                  <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setMovementMode('accelerometer')}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1 ${
+                        movementMode === 'accelerometer'
+                          ? 'bg-amber-500 text-black shadow-[0_0_10px_rgba(245,158,11,0.4)]'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Activity className="w-3 h-3" />
+                      <span>Acelerômetro</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMovementMode('gps')}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1 ${
+                        movementMode === 'gps'
+                          ? 'bg-emerald-500 text-black shadow-[0_0_10px_rgba(16,185,129,0.4)]'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <MapPin className="w-3 h-3" />
+                      <span>GPS Real</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="text-[10px] font-mono">
+                  {movementMode === 'accelerometer' ? (
+                    <span className="text-amber-300/90">
+                      👟 <strong>Acelerômetro Ativo:</strong> Incline ou dê passos físicos com o celular para caminhar para frente.
+                    </span>
+                  ) : (
+                    <span className="text-emerald-300/90">
+                      📍 <strong>GPS Real Ativo:</strong> Seu personagem no jogo acompanha seu movimento físico no GPS.
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

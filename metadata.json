@@ -1,0 +1,11 @@
+{
+  "name": "Remix: Tempo Strike: Zombie GPS Apocalypse",
+  "description": "3D First-Person Zombie Survival game powered by webcam hand tracking, real GPS movement, safe houses, and real-time multiplayer. Vamos fazer uma versão para aplicativo android",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

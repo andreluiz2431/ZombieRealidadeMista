@@ -145,7 +145,9 @@ export const App: React.FC = () => {
     isMotionSupported,
     hasMotionPermission,
     requestMotionPermission,
-    triggerForwardStep
+    triggerForwardStep,
+    isAutoWalking,
+    setIsAutoWalking
   } = useAccelerometerMovement({
     enabled: movementMode === 'accelerometer',
     gameStatus,
@@ -268,20 +270,24 @@ export const App: React.FC = () => {
   // -------------------------------------------------------------
   // 3. Zombie Wave & AI System
   // -------------------------------------------------------------
+  // 3. Zombie Wave & AI System (Calm exploration mode with 4m proximity alert)
+  // -------------------------------------------------------------
   const spawnZombieWave = useCallback((waveNum: number) => {
     const newZombies: ZombieData[] = [];
-    const count = 4 + waveNum * 3;
+    // Reduced enemy count: Wave 1 = 2 zombies, Wave 2 = 3 zombies, etc.
+    const count = 2 + waveNum;
 
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const dist = 18 + Math.random() * 25;
+      // Spawn further away so player can explore freely (30 to 55 meters)
+      const dist = 30 + Math.random() * 25;
       const x = playerPos.x + Math.sin(angle) * dist;
       const z = playerPos.z + Math.cos(angle) * dist;
 
       const rand = Math.random();
-      const type: 'walker' | 'runner' | 'brute' = rand > 0.7 ? 'runner' : rand > 0.85 ? 'brute' : 'walker';
+      const type: 'walker' | 'runner' | 'brute' = rand > 0.8 ? 'runner' : rand > 0.92 ? 'brute' : 'walker';
       const maxHealth = type === 'brute' ? 200 : type === 'runner' ? 60 : 100;
-      const speed = type === 'runner' ? 2.8 : type === 'brute' ? 1.2 : 1.8;
+      const speed = type === 'runner' ? 2.6 : type === 'brute' ? 1.2 : 1.6;
 
       newZombies.push({
         id: `zombie-${waveNum}-${i}-${Date.now()}`,
@@ -292,8 +298,8 @@ export const App: React.FC = () => {
         maxHealth,
         speed,
         type,
-        state: 'chasing',
-        rotation: 0,
+        state: 'idle', // Start idle so player can explore without instant horde attack
+        rotation: Math.random() * Math.PI * 2,
         damage: type === 'brute' ? 20 : 10
       });
     }
@@ -313,33 +319,54 @@ export const App: React.FC = () => {
           if (z.state === 'dead') return z;
           aliveCount++;
 
-          // If player is in safe zone, zombies gather around the perimeter
           const dx = playerPos.x - z.x;
           const dz = playerPos.z - z.z;
           const distToPlayer = Math.sqrt(dx * dx + dz * dz);
 
-          const angle = Math.atan2(dx, dz);
+          const angleToPlayer = Math.atan2(dx, dz);
 
-          // Attack state check
-          let state: 'chasing' | 'attacking' | 'hit' | 'dead' = z.state === 'hit' ? 'hit' : 'chasing';
-          if (distToPlayer < 2.0) {
-            state = 'attacking';
+          let state: 'idle' | 'chasing' | 'attacking' | 'hit' | 'dead' = z.state;
+
+          // Proximity & Sight detection trigger:
+          // 1. Player gets within 4.0 meters (or attacked)
+          // 2. Or zombie is facing player within 7.0 meters
+          const isFacingPlayer = Math.abs(z.rotation - angleToPlayer) < 1.2;
+          const isTriggered = distToPlayer <= 4.0 || (distToPlayer <= 7.0 && isFacingPlayer) || z.state === 'hit';
+
+          if (state === 'idle') {
+            if (isTriggered) {
+              state = 'chasing'; // Zombie spots or detects player!
+            }
+          } else if (state === 'chasing' || state === 'attacking' || state === 'hit') {
+            if (distToPlayer <= 2.0) {
+              state = 'attacking';
+            } else {
+              state = 'chasing';
+            }
           }
 
-          // Move towards player unless in safe zone
-          let moveSpeed = z.speed * 0.15;
-          if (isPlayerInSafeZone && distToPlayer < 8) {
-            moveSpeed = 0; // Hold outside safe house
-          }
+          // Move towards player ONLY if activated ('chasing' or 'attacking')
+          let moveSpeed = 0;
+          let newX = z.x;
+          let newZ = z.z;
+          let newRotation = z.rotation;
 
-          const newX = z.x + Math.sin(angle) * moveSpeed;
-          const newZ = z.z + Math.cos(angle) * moveSpeed;
+          if (state === 'chasing' || state === 'attacking') {
+            moveSpeed = z.speed * 0.15;
+            // Hold outside safe house perimeter
+            if (isPlayerInSafeZone && distToPlayer < 8) {
+              moveSpeed = 0;
+            }
+            newX = z.x + Math.sin(angleToPlayer) * moveSpeed;
+            newZ = z.z + Math.cos(angleToPlayer) * moveSpeed;
+            newRotation = angleToPlayer;
+          }
 
           return {
             ...z,
             x: newX,
             z: newZ,
-            rotation: angle,
+            rotation: newRotation,
             state
           };
         });
@@ -359,7 +386,7 @@ export const App: React.FC = () => {
       });
 
       // Occasional ambient zombie growl
-      if (Math.random() < 0.08) {
+      if (Math.random() < 0.05) {
         soundEngine.playZombieGroan();
       }
     }, 150);
@@ -632,18 +659,48 @@ export const App: React.FC = () => {
 
               {/* Movement Mode Status Box */}
               {movementMode === 'accelerometer' ? (
-                <div className="bg-slate-950/80 px-3 py-1.5 rounded-lg border border-amber-500/40 text-[10px] text-amber-300 font-mono flex items-center justify-between gap-2 shadow-[0_0_10px_rgba(245,158,11,0.2)]">
-                  <div className="flex items-center gap-1.5">
-                    <Footprints className="w-3.5 h-3.5 text-amber-400 animate-pulse shrink-0" />
-                    <span>Passos: <strong>{stepCount}</strong></span>
+                <div className="bg-slate-950/90 px-3 py-2 rounded-xl border border-amber-500/50 text-[11px] text-amber-300 font-mono flex flex-col gap-1.5 shadow-[0_0_15px_rgba(245,158,11,0.25)]">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Footprints className="w-4 h-4 text-amber-400 animate-pulse shrink-0" />
+                      <span>Passos: <strong className="text-white">{stepCount}</strong></span>
+                    </div>
+
+                    {!hasMotionPermission && (
+                      <button
+                        onClick={requestMotionPermission}
+                        className="pointer-events-auto px-2 py-0.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded text-[10px] animate-bounce"
+                      >
+                        Ativar Sensores
+                      </button>
+                    )}
                   </div>
-                  <button
-                    onClick={() => triggerForwardStep(1.0)}
-                    className="pointer-events-auto px-2 py-0.5 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded text-[10px] active:scale-95 transition-all shadow-sm flex items-center gap-1 shrink-0"
-                    title="Avançar 1 metro manualmente com o acelerômetro"
-                  >
-                    <span>Avançar (+1m)</span>
-                  </button>
+
+                  <div className="flex items-center gap-1.5 pointer-events-auto">
+                    <button
+                      type="button"
+                      onClick={() => triggerForwardStep(0.9)}
+                      className="flex-1 py-1 px-2 bg-amber-500 hover:bg-amber-400 text-black font-extrabold rounded-lg text-[11px] active:scale-95 transition-all shadow-md flex items-center justify-center gap-1"
+                      title="Dar 1 passo para a frente"
+                    >
+                      <Footprints className="w-3.5 h-3.5" />
+                      <span>Dar Passo (+1m)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsAutoWalking(!isAutoWalking)}
+                      className={`px-2.5 py-1 font-bold rounded-lg text-[10px] transition-all flex items-center gap-1 ${
+                        isAutoWalking
+                          ? 'bg-amber-400 text-black shadow-[0_0_8px_#f59e0b] animate-pulse'
+                          : 'bg-slate-800 text-slate-300 hover:text-white border border-slate-700'
+                      }`}
+                      title="Ativar/desativar caminhada contínua automática"
+                    >
+                      <Activity className="w-3 h-3" />
+                      <span>{isAutoWalking ? 'Caminhando...' : 'Auto-Caminhar'}</span>
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="bg-slate-950/80 px-3 py-1.5 rounded-lg border border-slate-800 text-[10px] text-slate-300 font-mono flex items-center gap-1.5">

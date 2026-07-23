@@ -40,7 +40,7 @@ export interface ZombieData {
   maxHealth: number;
   speed: number;
   type: 'walker' | 'runner' | 'brute';
-  state: 'chasing' | 'attacking' | 'hit' | 'dead';
+  state: 'idle' | 'chasing' | 'attacking' | 'hit' | 'dead';
   rotation: number;
   hitTime?: number;
   damage: number;

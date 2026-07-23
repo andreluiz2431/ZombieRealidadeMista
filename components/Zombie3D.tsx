@@ -36,6 +36,15 @@ export const Zombie3D: React.FC<Zombie3DProps> = ({ zombie }) => {
       if (rightArmRef.current) rightArmRef.current.rotation.x = -Math.PI / 3 - swing;
       if (leftLegRef.current) leftLegRef.current.rotation.x = swing;
       if (rightLegRef.current) rightLegRef.current.rotation.x = -swing;
+    } else if (zombie.state === 'idle') {
+      // Gentle idle sway breathing
+      const time = state.clock.getElapsedTime() * 1.5;
+      const sway = Math.sin(time) * 0.05;
+
+      if (leftArmRef.current) leftArmRef.current.rotation.x = sway;
+      if (rightArmRef.current) rightArmRef.current.rotation.x = -sway;
+      if (leftLegRef.current) leftLegRef.current.rotation.x = 0;
+      if (rightLegRef.current) rightLegRef.current.rotation.x = 0;
     }
   });
 

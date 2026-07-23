@@ -18,9 +18,12 @@ export const useAccelerometerMovement = ({
   const [lastStepTime, setLastStepTime] = useState<number>(0);
   const [hasMotionPermission, setHasMotionPermission] = useState<boolean>(false);
   const [isMotionSupported, setIsMotionSupported] = useState<boolean>(false);
+  const [isAutoWalking, setIsAutoWalking] = useState<boolean>(false);
+  const [tiltAngle, setTiltAngle] = useState<number>(0);
 
   const lastStepTimestampRef = useRef<number>(0);
-  const lastAccelRef = useRef<{ x: number; y: number; z: number }>({ x: 0, y: 0, z: 0 });
+  const baselineMagRef = useRef<number>(9.81);
+  const isWalkingPressedRef = useRef<boolean>(false);
 
   // Manual step trigger function (e.g. from button tap or auto-walk loop)
   const triggerForwardStep = useCallback((stepDistance: number = 0.85) => {
@@ -38,6 +41,7 @@ export const useAccelerometerMovement = ({
 
     onStep({ dx, dz });
     setStepCount((c) => c + 1);
+    setLastStepTime(performance.now());
 
     // Haptic feedback if available on mobile
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -51,7 +55,7 @@ export const useAccelerometerMovement = ({
 
   // Check support & iOS permission
   useEffect(() => {
-    const supported = typeof window !== 'undefined' && 'DeviceMotionEvent' in window;
+    const supported = typeof window !== 'undefined' && ('DeviceMotionEvent' in window || 'DeviceOrientationEvent' in window);
     setIsMotionSupported(supported);
 
     if (supported && typeof (DeviceMotionEvent as any).requestPermission !== 'function') {
@@ -60,73 +64,114 @@ export const useAccelerometerMovement = ({
   }, []);
 
   const requestMotionPermission = useCallback(async (): Promise<boolean> => {
-    if (typeof window === 'undefined' || !('DeviceMotionEvent' in window)) {
-      return false;
-    }
+    if (typeof window === 'undefined') return false;
 
-    if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
+    let granted = true;
+
+    // DeviceMotionEvent permission (iOS 13+)
+    if (typeof (DeviceMotionEvent as any)?.requestPermission === 'function') {
       try {
         const response = await (DeviceMotionEvent as any).requestPermission();
-        if (response === 'granted') {
-          setHasMotionPermission(true);
-          return true;
-        } else {
-          setHasMotionPermission(false);
-          return false;
-        }
+        if (response !== 'granted') granted = false;
       } catch (err) {
-        console.warn('DeviceMotion permission request error:', err);
-        return false;
+        console.warn('DeviceMotion permission error:', err);
+        granted = false;
       }
-    } else {
-      setHasMotionPermission(true);
-      return true;
     }
+
+    // DeviceOrientationEvent permission (iOS 13+)
+    if (typeof (DeviceOrientationEvent as any)?.requestPermission === 'function') {
+      try {
+        const response = await (DeviceOrientationEvent as any).requestPermission();
+        if (response !== 'granted') granted = false;
+      } catch (err) {
+        console.warn('DeviceOrientation permission error:', err);
+      }
+    }
+
+    setHasMotionPermission(granted);
+    return granted;
   }, []);
 
-  // Motion event listener for step detection
+  // Motion event listener for step detection & magnitude impulse
   useEffect(() => {
-    if (!enabled || gameStatus !== 'PLAYING' || !isMotionSupported) return;
+    if (!enabled || gameStatus !== 'PLAYING') return;
 
-    const STEP_COOLDOWN_MS = 380; // Min time between physical step detections
-    const ACCEL_THRESHOLD = 2.2;  // m/s^2 delta threshold for step peak
+    const STEP_COOLDOWN_MS = 320; // Min time between physical steps
+    const IMPULSE_THRESHOLD = 1.15; // m/s^2 deviation from moving baseline
 
     const handleDeviceMotion = (event: DeviceMotionEvent) => {
       const now = performance.now();
-      if (now - lastStepTimestampRef.current < STEP_COOLDOWN_MS) return;
 
       let ax = 0, ay = 0, az = 0;
+      let isGravityIncluded = false;
 
-      if (event.acceleration && (event.acceleration.x !== null)) {
+      if (event.acceleration && event.acceleration.x !== null && event.acceleration.x !== undefined) {
         ax = event.acceleration.x || 0;
         ay = event.acceleration.y || 0;
         az = event.acceleration.z || 0;
-      } else if (event.accelerationIncludingGravity && (event.accelerationIncludingGravity.x !== null)) {
+      } else if (event.accelerationIncludingGravity && event.accelerationIncludingGravity.x !== null) {
         ax = event.accelerationIncludingGravity.x || 0;
         ay = event.accelerationIncludingGravity.y || 0;
         az = event.accelerationIncludingGravity.z || 0;
+        isGravityIncluded = true;
       } else {
         return;
       }
 
-      // Compute acceleration magnitude delta compared to previous frame
-      const deltaX = ax - lastAccelRef.current.x;
-      const deltaY = ay - lastAccelRef.current.y;
-      const deltaZ = az - lastAccelRef.current.z;
-      const deltaAccel = Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
+      const currentMag = Math.sqrt(ax * ax + ay * ay + az * az);
 
-      lastAccelRef.current = { x: ax, y: ay, z: az };
+      // Update baseline magnitude with exponential smoothing (alpha = 0.05)
+      const alpha = 0.05;
+      if (isGravityIncluded) {
+        baselineMagRef.current = baselineMagRef.current * (1 - alpha) + currentMag * alpha;
+      } else {
+        baselineMagRef.current = baselineMagRef.current * (1 - alpha) + 0;
+      }
 
-      if (deltaAccel > ACCEL_THRESHOLD) {
+      const impulse = Math.abs(currentMag - baselineMagRef.current);
+
+      if (impulse > IMPULSE_THRESHOLD && (now - lastStepTimestampRef.current > STEP_COOLDOWN_MS)) {
         lastStepTimestampRef.current = now;
-        setLastStepTime(now);
-        triggerForwardStep(0.9); // Step forward 0.9 meters
+        triggerForwardStep(0.85); // Walk forward 0.85m
       }
     };
 
-    window.addEventListener('devicemotion', handleDeviceMotion);
-    return () => window.removeEventListener('devicemotion', handleDeviceMotion);
-  }, [enabled, gameStatus, isMotionSupported, triggerForwardStep]);
+    // Device Orientation tilt forward detector
+    const handleDeviceOrientation = (event: DeviceOrientationEvent) => {
+      if (event.beta !== null && event.beta !== undefined) {
+        setTiltAngle(event.beta);
+      }
+    };
+
+    window.addEventListener('devicemotion', handleDeviceMotion, true);
+    window.addEventListener('deviceorientation', handleDeviceOrientation, true);
+
+    return () => {
+      window.removeEventListener('devicemotion', handleDeviceMotion, true);
+      window.removeEventListener('deviceorientation', handleDeviceOrientation, true);
+    };
+  }, [enabled, gameStatus, triggerForwardStep]);
+
+  // Tilt forward walking timer (if phone is pitched forward < 15deg when held)
+  useEffect(() => {
+    if (!enabled || gameStatus !== 'PLAYING') return;
+
+    // Check if phone is tilted forward significantly (e.g. beta < 15 or beta > 140 depending on hold)
+    const isTiltedForward = (tiltAngle > 120 || tiltAngle < 15) && tiltAngle !== 0;
+
+    if (!isTiltedForward && !isAutoWalking && !isWalkingPressedRef.current) return;
+
+    const interval = setInterval(() => {
+      const now = performance.now();
+      if (now - lastStepTimestampRef.current > 380) {
+        lastStepTimestampRef.current = now;
+        triggerForwardStep(0.75);
+      }
+    }, 400);
+
+    return () => clearInterval(interval);
+  }, [enabled, gameStatus, tiltAngle, isAutoWalking, triggerForwardStep]);
 
   return {
     stepCount,
@@ -134,6 +179,9 @@ export const useAccelerometerMovement = ({
     isMotionSupported,
     hasMotionPermission,
     requestMotionPermission,
-    triggerForwardStep
+    triggerForwardStep,
+    isAutoWalking,
+    setIsAutoWalking
   };
 };
+

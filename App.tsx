@@ -33,7 +33,8 @@ import {
   Minimize,
   Smartphone,
   Eye,
-  RefreshCw
+  RefreshCw,
+  Glasses
 } from 'lucide-react';
 
 // Default Safe House Shelters around origin
@@ -101,6 +102,9 @@ export const App: React.FC = () => {
   const [roomId, setRoomId] = useState('apocalypse-sp');
   const [playerName, setPlayerName] = useState(() => `Sobrevivente_${Math.floor(1000 + Math.random() * 9000)}`);
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([]);
+
+  // VR Stereoscopic (Google Cardboard) Mode State
+  const [isStereoVR, setIsStereoVR] = useState<boolean>(false);
 
   // Video Ref & MediaPipe Hook
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -453,6 +457,7 @@ export const App: React.FC = () => {
             playerPos={playerPos}
             handPositionsRef={handPositionsRef}
             cameraQuaternionRef={cameraQuaternionRef}
+            isStereoVR={isStereoVR}
             zombies={zombies}
             houses={houses}
             remotePlayers={remotePlayers}
@@ -465,6 +470,24 @@ export const App: React.FC = () => {
 
       {/* Webcam Feed for Tracking Preview */}
       <WebcamPreview videoRef={videoRef} resultsRef={lastResultsRef} isCameraReady={isCameraReady} />
+
+      {/* VR Cardboard Center Divider & Dual Eye Reticles */}
+      {gameStatus === GameStatus.PLAYING && isStereoVR && (
+        <div className="absolute inset-0 pointer-events-none z-10 flex">
+          {/* Middle Dividing Line for VR Headset lenses */}
+          <div className="absolute inset-y-0 left-1/2 w-[2px] -translate-x-1/2 bg-slate-900/90 border-r border-slate-800/80 shadow-2xl" />
+
+          {/* Left Eye Aim Reticle */}
+          <div className="absolute left-1/4 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full border border-red-500/80 flex items-center justify-center opacity-80">
+            <div className="w-1 h-1 bg-red-500 rounded-full" />
+          </div>
+
+          {/* Right Eye Aim Reticle */}
+          <div className="absolute left-3/4 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full border border-red-500/80 flex items-center justify-center opacity-80">
+            <div className="w-1 h-1 bg-red-500 rounded-full" />
+          </div>
+        </div>
+      )}
 
       {/* ------------------------------------------------------------- */}
       {/* HUD OVERLAY (TOP & SIDE PANELS) */}
@@ -524,8 +547,21 @@ export const App: React.FC = () => {
 
             {/* Radar, GPS & View/Display Controls */}
             <div className="flex flex-col items-end gap-2">
-              {/* Quick Gyro & Fullscreen controls bar */}
+              {/* Quick Gyro, Fullscreen & VR Cardboard controls bar */}
               <div className="pointer-events-auto flex items-center gap-1.5 bg-slate-950/80 p-1.5 rounded-xl border border-slate-800 backdrop-blur-md shadow-lg">
+                <button
+                  onClick={() => setIsStereoVR(!isStereoVR)}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 border active:scale-95 transition-all ${
+                    isStereoVR
+                      ? 'bg-purple-900/90 text-purple-200 border-purple-500/60'
+                      : 'bg-slate-900 hover:bg-slate-800 text-purple-300 border-purple-500/30'
+                  }`}
+                  title={isStereoVR ? 'Desativar VR Cardboard' : 'Ativar VR Cardboard'}
+                >
+                  <Glasses className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="hidden sm:inline">{isStereoVR ? 'VR Cardboard ON' : 'Modo VR'}</span>
+                </button>
+
                 <button
                   onClick={calibrateGyro}
                   className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 border border-cyan-500/30 active:scale-95 transition-all"
@@ -645,7 +681,11 @@ export const App: React.FC = () => {
             {/* Instruction cards */}
             <div className="space-y-2 text-xs text-slate-300 text-left bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 mb-4">
               <div className="flex items-center gap-2">
-                <Smartphone className="w-4 h-4 text-purple-400 shrink-0" />
+                <Glasses className="w-4 h-4 text-purple-400 shrink-0" />
+                <span><strong>Google Cardboard VR:</strong> Visão estereoscópica 3D (duas imagens lado a lado) para usar com óculos de realidade virtual.</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-4 h-4 text-cyan-400 shrink-0" />
                 <span><strong>Giroscópio & Rotação 360°:</strong> Mova o celular para olhar em todas as direções (ou arraste a tela no PC/Mobile).</span>
               </div>
               <div className="flex items-center gap-2">
@@ -657,19 +697,44 @@ export const App: React.FC = () => {
                 <span><strong>Mão Direita (Bastão):</strong> Movimente ou golpeie para atacar com o bastão.</span>
               </div>
               <div className="flex items-center gap-2">
-                <Zap className="w-4 h-4 text-cyan-400 shrink-0" />
-                <span><strong>Mão Esquerda (Soco):</strong> Desfira socos para abater inimigos.</span>
-              </div>
-              <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span><strong>Casas de Segurança:</strong> Entre nas áreas de proteção verde para recuperar vida e se abrigar dos zombies.</span>
+                <span><strong>Casas de Segurança:</strong> Entre nas áreas de proteção verde para recuperar vida.</span>
               </div>
             </div>
 
-            {/* Display & Gyro Settings Panel */}
+            {/* Display & Gyro & VR Settings Panel */}
             <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 mb-4 flex flex-col gap-2 text-left text-xs">
-              {/* Fullscreen Option */}
+              {/* Google Cardboard VR Option */}
               <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                  <Glasses className="w-4 h-4 text-purple-400" />
+                  <span>Google Cardboard (Óculos VR):</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsStereoVR(!isStereoVR)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 ${
+                    isStereoVR
+                      ? 'bg-purple-900/90 border-purple-400 text-purple-200 shadow-[0_0_12px_rgba(168,85,247,0.4)]'
+                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
+                  }`}
+                >
+                  {isStereoVR ? (
+                    <>
+                      <Eye className="w-3.5 h-3.5 text-purple-300" />
+                      <span>VR Ativado (Dual)</span>
+                    </>
+                  ) : (
+                    <>
+                      <Glasses className="w-3.5 h-3.5" />
+                      <span>Desativado (Normal)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Fullscreen Option */}
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
                 <div className="flex items-center gap-1.5 text-slate-200 font-bold">
                   <Maximize className="w-4 h-4 text-emerald-400" />
                   <span>Modo Tela Cheia:</span>

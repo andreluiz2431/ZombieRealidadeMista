@@ -21,6 +21,7 @@ interface GameSceneProps {
   playerPos: PlayerWorldPos;
   handPositionsRef: React.MutableRefObject<any>;
   cameraQuaternionRef?: React.MutableRefObject<THREE.Quaternion>;
+  isStereoVR?: boolean;
   zombies: ZombieData[];
   houses: HouseData[];
   remotePlayers: RemotePlayer[];
@@ -34,6 +35,7 @@ export const GameScene: React.FC<GameSceneProps> = ({
   playerPos,
   handPositionsRef,
   cameraQuaternionRef,
+  isStereoVR = false,
   zombies,
   houses,
   remotePlayers,
@@ -42,6 +44,7 @@ export const GameScene: React.FC<GameSceneProps> = ({
   onPlayerDamaged
 }) => {
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
+  const stereoCamera = useMemo(() => new THREE.StereoCamera(), []);
   const shakeIntensity = useRef<number>(0);
   const lastAttackTime = useRef<{ left: number; right: number }>({ left: 0, right: 0 });
 
@@ -55,7 +58,7 @@ export const GameScene: React.FC<GameSceneProps> = ({
   const leftHandVelRef = useRef<THREE.Vector3 | null>(null);
   const rightHandVelRef = useRef<THREE.Vector3 | null>(null);
 
-  useFrame((_state, delta) => {
+  useFrame((state, delta) => {
     // 1. Camera First Person Follow Player & Gyroscope/Drag Orientation
     if (cameraRef.current) {
       const shake = shakeIntensity.current;
@@ -175,7 +178,35 @@ export const GameScene: React.FC<GameSceneProps> = ({
         }
       }
     });
-  });
+
+    // 5. Google Cardboard / VR Stereoscopic Dual Eye Render Pipeline
+    if (isStereoVR && cameraRef.current) {
+      const gl = state.gl;
+      const scene = state.scene;
+      const camera = cameraRef.current;
+      const width = gl.domElement.clientWidth;
+      const height = gl.domElement.clientHeight;
+
+      stereoCamera.aspect = (width / 2) / height;
+      stereoCamera.update(camera);
+
+      gl.clear();
+
+      // Left Eye Render
+      gl.setViewport(0, 0, width / 2, height);
+      gl.setScissor(0, 0, width / 2, height);
+      gl.setScissorTest(true);
+      gl.render(scene, stereoCamera.cameraL);
+
+      // Right Eye Render
+      gl.setViewport(width / 2, 0, width / 2, height);
+      gl.setScissor(width / 2, 0, width / 2, height);
+      gl.setScissorTest(true);
+      gl.render(scene, stereoCamera.cameraR);
+
+      gl.setScissorTest(false);
+    }
+  }, isStereoVR ? 1 : 0);
 
   return (
     <>

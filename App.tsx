@@ -79,9 +79,11 @@ const DEFAULT_HOUSES: HouseData[] = [
   }
 ];
 
+export const MAX_PLAYER_HEALTH = 300;
+
 export const App: React.FC = () => {
   const [gameStatus, setGameStatus] = useState<GameStatus>(GameStatus.LOADING);
-  const [health, setHealth] = useState(100);
+  const [health, setHealth] = useState(MAX_PLAYER_HEALTH);
   const [kills, setKills] = useState(0);
   const [wave, setWave] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
@@ -256,12 +258,16 @@ export const App: React.FC = () => {
     }
   }, [playerPos, houses, isPlayerInSafeZone]);
 
-  // Health Regeneration in Safe House
+  // Health Regeneration System (Rapid inside Safe House, slow passive outside)
   useEffect(() => {
-    if (!isPlayerInSafeZone || gameStatus !== GameStatus.PLAYING) return;
+    if (gameStatus !== GameStatus.PLAYING) return;
 
     const interval = setInterval(() => {
-      setHealth((h) => Math.min(100, h + 3));
+      setHealth((h) => {
+        if (h >= MAX_PLAYER_HEALTH) return h;
+        const regenAmount = isPlayerInSafeZone ? 15 : 2; // +15 HP/s in shelter, +2 HP/s passive
+        return Math.min(MAX_PLAYER_HEALTH, h + regenAmount);
+      });
     }, 1000);
 
     return () => clearInterval(interval);
@@ -475,7 +481,7 @@ export const App: React.FC = () => {
     // Calibrate baseline gyro orientation
     calibrateGyro();
 
-    setHealth(100);
+    setHealth(MAX_PLAYER_HEALTH);
     setKills(0);
     setWave(1);
     setGameStatus(GameStatus.PLAYING);
@@ -568,14 +574,14 @@ export const App: React.FC = () => {
                   <span className="flex items-center gap-1">
                     <Zap className="w-3.5 h-3.5 text-red-500" /> VITALIDADE DO SOBREVIVENTE
                   </span>
-                  <span>{Math.round(health)}%</span>
+                  <span className="font-mono text-emerald-400">{Math.round(health)} / {MAX_PLAYER_HEALTH} HP</span>
                 </div>
                 <div className="h-3.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
                   <div
                     className={`h-full transition-all duration-300 ${
-                      health > 50 ? 'bg-emerald-500' : health > 20 ? 'bg-amber-500' : 'bg-red-600 animate-pulse'
+                      health > MAX_PLAYER_HEALTH * 0.5 ? 'bg-emerald-500' : health > MAX_PLAYER_HEALTH * 0.2 ? 'bg-amber-500' : 'bg-red-600 animate-pulse'
                     }`}
-                    style={{ width: `${health}%` }}
+                    style={{ width: `${(health / MAX_PLAYER_HEALTH) * 100}%` }}
                   />
                 </div>
 

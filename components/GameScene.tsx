@@ -174,7 +174,8 @@ export const GameScene: React.FC<GameSceneProps> = ({
           new THREE.Vector3(playerPos.x, playerPos.y + 1.2, playerPos.z)
         );
         if (distPlayer < 1.6) {
-          onPlayerDamaged(zombie.damage * delta * 8);
+          // Controlled damage rate: ~15 HP/sec for walkers (approx 20 hits total against 300 HP)
+          onPlayerDamaged(zombie.damage * delta * 1.5);
         }
       }
     });

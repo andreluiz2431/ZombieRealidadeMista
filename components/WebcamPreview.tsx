@@ -7,11 +7,14 @@
 import React, { useEffect, useRef } from 'react';
 import { HandLandmarkerResult } from '@mediapipe/tasks-vision';
 import { COLORS } from '../types';
+import { Camera, SwitchCamera } from 'lucide-react';
 
 interface WebcamPreviewProps {
     videoRef: React.RefObject<HTMLVideoElement | null>;
     resultsRef: React.MutableRefObject<HandLandmarkerResult | null>;
     isCameraReady: boolean;
+    facingMode?: 'user' | 'environment';
+    onSwitchCamera?: () => void;
 }
 
 const HAND_CONNECTIONS = [
@@ -23,7 +26,13 @@ const HAND_CONNECTIONS = [
     [5, 9], [9, 13], [13, 17], [0, 5], [0, 17] // Palm
 ];
 
-const WebcamPreview: React.FC<WebcamPreviewProps> = ({ videoRef, resultsRef, isCameraReady }) => {
+const WebcamPreview: React.FC<WebcamPreviewProps> = ({
+    videoRef,
+    resultsRef,
+    isCameraReady,
+    facingMode = 'user',
+    onSwitchCamera
+}) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     useEffect(() => {
@@ -112,11 +121,23 @@ const WebcamPreview: React.FC<WebcamPreviewProps> = ({ videoRef, resultsRef, isC
     if (!isCameraReady) return null;
 
     return (
-        <div className="fixed bottom-4 right-4 w-64 h-48 bg-black/60 border-2 border-blue-500/30 rounded-xl overflow-hidden backdrop-blur-md z-50 shadow-[0_0_20px_rgba(0,0,0,0.5)] pointer-events-none transition-opacity duration-500">
+        <div className="fixed bottom-4 right-4 w-64 h-48 bg-black/60 border-2 border-blue-500/30 rounded-xl overflow-hidden backdrop-blur-md z-50 shadow-[0_0_20px_rgba(0,0,0,0.5)] transition-opacity duration-500">
             {/* Header/Label */}
-            <div className="absolute top-0 left-0 right-0 bg-black/80 text-[10px] text-amber-300 px-2 py-1 font-mono uppercase tracking-wider flex justify-between z-10 border-b border-amber-500/30">
-                <span>Ráster Câmera: Mãos</span>
-                <span className="text-cyan-300">Esq: Soco | Dir: Bastão</span>
+            <div className="absolute top-0 left-0 right-0 bg-black/80 text-[10px] text-amber-300 px-2 py-1 font-mono uppercase tracking-wider flex justify-between items-center z-10 border-b border-amber-500/30">
+                <span className="flex items-center gap-1">
+                    <Camera className="w-3 h-3 text-cyan-400" />
+                    <span>{facingMode === 'user' ? 'Frontal' : 'Traseira'}</span>
+                </span>
+                {onSwitchCamera && (
+                    <button
+                        onClick={onSwitchCamera}
+                        className="pointer-events-auto bg-slate-800 hover:bg-slate-700 text-cyan-300 px-1.5 py-0.5 rounded text-[10px] flex items-center gap-1 active:scale-95 transition-all border border-cyan-500/30"
+                        title="Alternar Câmera (Frontal / Traseira)"
+                    >
+                        <SwitchCamera className="w-3 h-3" />
+                        <span>Inverter</span>
+                    </button>
+                )}
             </div>
             <canvas ref={canvasRef} className="w-full h-full object-cover mt-4" />
         </div>

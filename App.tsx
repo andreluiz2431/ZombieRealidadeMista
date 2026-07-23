@@ -34,7 +34,9 @@ import {
   Smartphone,
   Eye,
   RefreshCw,
-  Glasses
+  Glasses,
+  Camera,
+  SwitchCamera
 } from 'lucide-react';
 
 // Default Safe House Shelters around origin
@@ -108,7 +110,7 @@ export const App: React.FC = () => {
 
   // Video Ref & MediaPipe Hook
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { isCameraReady, handPositionsRef, lastResultsRef, error: cameraError } = useMediaPipe(videoRef);
+  const { isCameraReady, handPositionsRef, lastResultsRef, error: cameraError, facingMode, switchCamera } = useMediaPipe(videoRef);
 
   // Fullscreen & Gyroscope Hooks
   const { isFullscreen, isSupported: isFullscreenSupported, toggleFullscreen, requestFullscreen } = useFullscreen();
@@ -469,7 +471,13 @@ export const App: React.FC = () => {
       </Canvas>
 
       {/* Webcam Feed for Tracking Preview */}
-      <WebcamPreview videoRef={videoRef} resultsRef={lastResultsRef} isCameraReady={isCameraReady} />
+      <WebcamPreview
+        videoRef={videoRef}
+        resultsRef={lastResultsRef}
+        isCameraReady={isCameraReady}
+        facingMode={facingMode}
+        onSwitchCamera={switchCamera}
+      />
 
       {/* VR Cardboard Center Divider & Dual Eye Reticles */}
       {gameStatus === GameStatus.PLAYING && isStereoVR && (
@@ -658,9 +666,9 @@ export const App: React.FC = () => {
       {/* ------------------------------------------------------------- */}
       {/* MENUS (START, LOADING, GAME OVER) */}
       {/* ------------------------------------------------------------- */}
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-auto z-30">
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-auto z-30 overflow-y-auto p-3 sm:p-6">
         {gameStatus === GameStatus.LOADING && (
-          <div className="bg-slate-950/90 p-8 rounded-3xl flex flex-col items-center border border-blue-500/40 backdrop-blur-xl shadow-2xl max-w-sm text-center">
+          <div className="bg-slate-950/90 p-8 rounded-3xl flex flex-col items-center border border-blue-500/40 backdrop-blur-xl shadow-2xl max-w-sm text-center my-auto">
             <div className="animate-spin rounded-full h-14 w-14 border-t-4 border-b-4 border-blue-500 mb-4"></div>
             <h2 className="text-xl text-white font-bold mb-1">Inicializando Rastreador de Mãos</h2>
             <p className="text-xs text-blue-300 mb-2">{!isCameraReady ? 'Conectando à câmera...' : 'Carregando cenário 3D...'}</p>
@@ -669,17 +677,21 @@ export const App: React.FC = () => {
         )}
 
         {gameStatus === GameStatus.IDLE && (
-          <div className="bg-slate-950/90 p-8 rounded-3xl border-2 border-red-500/40 backdrop-blur-2xl max-w-md w-full shadow-2xl text-center text-white">
-            <div className="mb-4 flex justify-center">
-              <Sparkles className="w-12 h-12 text-red-500 animate-pulse" />
+          <div className="bg-slate-950/95 p-4 sm:p-6 md:p-8 rounded-3xl border-2 border-red-500/40 backdrop-blur-2xl max-w-md w-full my-auto shadow-2xl text-center text-white max-h-[92vh] overflow-y-auto scrollbar-thin">
+            <div className="mb-3 sm:mb-4 flex justify-center">
+              <Sparkles className="w-10 h-10 sm:w-12 sm:h-12 text-red-500 animate-pulse" />
             </div>
-            <h1 className="text-4xl font-black italic tracking-tighter mb-2 text-transparent bg-clip-text bg-gradient-to-r from-red-500 via-amber-400 to-red-600">
+            <h1 className="text-3xl sm:text-4xl font-black italic tracking-tighter mb-1 text-transparent bg-clip-text bg-gradient-to-r from-red-500 via-amber-400 to-red-600">
               ZOMBIELAND <span className="text-white">GPS</span>
             </h1>
-            <p className="text-xs text-slate-400 mb-6 font-mono">APOCALIPSE EM PRIMEIRA PESSOA</p>
+            <p className="text-xs text-slate-400 mb-4 sm:mb-6 font-mono">APOCALIPSE EM PRIMEIRA PESSOA</p>
 
             {/* Instruction cards */}
             <div className="space-y-2 text-xs text-slate-300 text-left bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 mb-4">
+              <div className="flex items-center gap-2">
+                <Camera className="w-4 h-4 text-cyan-400 shrink-0" />
+                <span><strong>Escolha de Câmera:</strong> Escolha a câmera traseira para ver à sua frente no celular ou frontal para selfies.</span>
+              </div>
               <div className="flex items-center gap-2">
                 <Glasses className="w-4 h-4 text-purple-400 shrink-0" />
                 <span><strong>Google Cardboard VR:</strong> Visão estereoscópica 3D (duas imagens lado a lado) para usar com óculos de realidade virtual.</span>
@@ -702,10 +714,27 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Display & Gyro & VR Settings Panel */}
+            {/* Display & Gyro & VR & Camera Settings Panel */}
             <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 mb-4 flex flex-col gap-2 text-left text-xs">
-              {/* Google Cardboard VR Option */}
+              {/* Camera Selection Option */}
               <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                  <Camera className="w-4 h-4 text-cyan-400" />
+                  <span>Câmera Principal:</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => switchCamera()}
+                  className="px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 bg-slate-800 border-slate-700 text-cyan-300 hover:bg-slate-700"
+                  title="Alternar entre Câmera Frontal e Traseira"
+                >
+                  <SwitchCamera className="w-3.5 h-3.5" />
+                  <span>{facingMode === 'user' ? 'Frontal (Selfie)' : 'Traseira (Atrás)'}</span>
+                </button>
+              </div>
+
+              {/* Google Cardboard VR Option */}
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
                 <div className="flex items-center gap-1.5 text-slate-200 font-bold">
                   <Glasses className="w-4 h-4 text-purple-400" />
                   <span>Google Cardboard (Óculos VR):</span>

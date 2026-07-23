@@ -5,15 +5,27 @@ const degToRad = Math.PI / 180;
 
 // Three.js helper vectors/quaternions for device orientation
 const zee = new THREE.Vector3(0, 0, 1);
-const euler = new THREE.Euler();
-const q0 = new THREE.Quaternion();
 const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -90 deg X rotation
+
+// Robust function to get current device screen orientation angle in degrees
+export const getScreenOrientation = (): number => {
+  if (typeof window !== 'undefined') {
+    if (window.screen && window.screen.orientation && typeof window.screen.orientation.angle === 'number') {
+      return window.screen.orientation.angle;
+    }
+    if (typeof window.orientation === 'number') {
+      return window.orientation;
+    }
+  }
+  return 0;
+};
 
 export const useGyroscope = () => {
   const [isGyroSupported, setIsGyroSupported] = useState<boolean>(false);
   const [isGyroEnabled, setIsGyroEnabled] = useState<boolean>(true);
   const [hasPermission, setHasPermission] = useState<boolean>(false);
   const [hasReceivedData, setHasReceivedData] = useState<boolean>(false);
+  const [screenOrientation, setScreenOrientation] = useState<number>(getScreenOrientation());
 
   // Camera Quaternion ref used directly by R3F frame loop
   const cameraQuaternionRef = useRef<THREE.Quaternion>(new THREE.Quaternion());
@@ -77,9 +89,38 @@ export const useGyroscope = () => {
     dragYawRef.current = 0;
   }, []);
 
-  // 4. DeviceOrientation Event Listener
+  // 4. Listen for Screen Orientation changes (e.g. Portrait <-> Landscape)
+  useEffect(() => {
+    const handleOrientationChange = () => {
+      const newOrient = getScreenOrientation();
+      setScreenOrientation(newOrient);
+      // Auto re-calibrate baseline when screen orientation changes so landscape view stays centered
+      setTimeout(() => {
+        calibrateGyro();
+      }, 150);
+    };
+
+    window.addEventListener('orientationchange', handleOrientationChange);
+    window.addEventListener('resize', handleOrientationChange);
+    if (window.screen && window.screen.orientation) {
+      window.screen.orientation.addEventListener('change', handleOrientationChange);
+    }
+
+    return () => {
+      window.removeEventListener('orientationchange', handleOrientationChange);
+      window.removeEventListener('resize', handleOrientationChange);
+      if (window.screen && window.screen.orientation) {
+        window.screen.orientation.removeEventListener('change', handleOrientationChange);
+      }
+    };
+  }, [calibrateGyro]);
+
+  // 5. DeviceOrientation Event Listener
   useEffect(() => {
     if (!isGyroSupported || !isGyroEnabled || !hasPermission) return;
+
+    const euler = new THREE.Euler();
+    const q0 = new THREE.Quaternion();
 
     const handleDeviceOrientation = (event: DeviceOrientationEvent) => {
       if (event.alpha === null || event.beta === null || event.gamma === null) return;
@@ -92,14 +133,14 @@ export const useGyroscope = () => {
       const beta = event.beta ? event.beta : 0;   // -180..180
       const gamma = event.gamma ? event.gamma : 0; // -90..90
 
-      const screenOrient = window.orientation || window.screen?.orientation?.angle || 0;
+      const currentOrient = getScreenOrientation();
 
       // Compute raw device quaternion
       euler.set(beta * degToRad, alpha * degToRad, -gamma * degToRad, 'YXZ');
       const currentQuat = new THREE.Quaternion();
       currentQuat.setFromEuler(euler);
       currentQuat.multiply(q1);
-      currentQuat.multiply(q0.setFromAxisAngle(zee, -Number(screenOrient) * degToRad));
+      currentQuat.multiply(q0.setFromAxisAngle(zee, -currentOrient * degToRad));
 
       rawDeviceQuatRef.current.copy(currentQuat);
 
@@ -122,7 +163,7 @@ export const useGyroscope = () => {
     };
   }, [isGyroSupported, isGyroEnabled, hasPermission, hasReceivedData]);
 
-  // 5. Fallback & Additive Pointer Drag (Mouse / Touch Look)
+  // 6. Fallback & Additive Pointer Drag (Mouse / Touch Look)
   useEffect(() => {
     const handlePointerDown = (e: PointerEvent) => {
       // Ignore clicks on UI elements like buttons or inputs
@@ -180,6 +221,8 @@ export const useGyroscope = () => {
     setIsGyroEnabled,
     hasPermission,
     hasReceivedData,
+    screenOrientation,
+    isLandscape: Math.abs(screenOrientation) === 90 || Math.abs(screenOrientation) === 270,
     cameraQuaternionRef,
     requestGyroPermission,
     calibrateGyro

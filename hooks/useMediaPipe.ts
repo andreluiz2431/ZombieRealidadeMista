@@ -27,6 +27,7 @@ const mapHandToWorld = (x: number, y: number): THREE.Vector3 => {
 export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>) => {
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
 
   const handPositionsRef = useRef<{
     left: THREE.Vector3 | null;
@@ -51,6 +52,13 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
 
   const landmarkerRef = useRef<HandLandmarker | null>(null);
   const requestRef = useRef<number>(0);
+  const currentStreamRef = useRef<MediaStream | null>(null);
+
+  // Switch camera function
+  const switchCamera = async (targetMode?: 'user' | 'environment') => {
+    const nextMode = targetMode || (facingMode === 'user' ? 'environment' : 'user');
+    setFacingMode(nextMode);
+  };
 
   useEffect(() => {
     let isActive = true;
@@ -90,13 +98,22 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
 
     const startCamera = async () => {
       try {
+        if (currentStreamRef.current) {
+          currentStreamRef.current.getTracks().forEach((track) => track.stop());
+          currentStreamRef.current = null;
+        }
+
+        setIsCameraReady(false);
+
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: 'user',
+            facingMode: facingMode,
             width: { ideal: 640 },
             height: { ideal: 480 }
           }
         });
+
+        currentStreamRef.current = stream;
 
         if (videoRef.current && isActive) {
           videoRef.current.srcObject = stream;
@@ -109,7 +126,7 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
         }
       } catch (err) {
         console.error("Camera Error:", err);
-        setError("Could not access camera.");
+        setError("Could not access camera. Check device permissions or try flipping camera.");
       }
     };
 
@@ -203,12 +220,16 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
       if (landmarkerRef.current) {
           landmarkerRef.current.close();
       }
+      if (currentStreamRef.current) {
+          currentStreamRef.current.getTracks().forEach(t => t.stop());
+          currentStreamRef.current = null;
+      }
       if (videoRef.current && videoRef.current.srcObject) {
           const stream = videoRef.current.srcObject as MediaStream;
           stream.getTracks().forEach(t => t.stop());
       }
     };
-  }, [videoRef]);
+  }, [videoRef, facingMode]);
 
-  return { isCameraReady, handPositionsRef, lastResultsRef, error };
+  return { isCameraReady, handPositionsRef, lastResultsRef, error, facingMode, switchCamera };
 };

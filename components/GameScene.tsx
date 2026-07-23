@@ -20,6 +20,7 @@ interface GameSceneProps {
   gameStatus: GameStatus;
   playerPos: PlayerWorldPos;
   handPositionsRef: React.MutableRefObject<any>;
+  cameraQuaternionRef?: React.MutableRefObject<THREE.Quaternion>;
   zombies: ZombieData[];
   houses: HouseData[];
   remotePlayers: RemotePlayer[];
@@ -32,6 +33,7 @@ export const GameScene: React.FC<GameSceneProps> = ({
   gameStatus,
   playerPos,
   handPositionsRef,
+  cameraQuaternionRef,
   zombies,
   houses,
   remotePlayers,
@@ -54,7 +56,7 @@ export const GameScene: React.FC<GameSceneProps> = ({
   const rightHandVelRef = useRef<THREE.Vector3 | null>(null);
 
   useFrame((_state, delta) => {
-    // 1. Camera First Person Follow Player
+    // 1. Camera First Person Follow Player & Gyroscope/Drag Orientation
     if (cameraRef.current) {
       const shake = shakeIntensity.current;
       const shakeX = (Math.random() - 0.5) * shake;
@@ -66,6 +68,18 @@ export const GameScene: React.FC<GameSceneProps> = ({
         playerPos.z
       );
 
+      // Apply gyro & drag look orientation
+      if (cameraQuaternionRef?.current) {
+        const combinedQuat = cameraQuaternionRef.current.clone();
+        if (shake > 0) {
+          const shakeQuat = new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(shakeY * 0.1, shakeX * 0.1, 0)
+          );
+          combinedQuat.multiply(shakeQuat);
+        }
+        cameraRef.current.quaternion.copy(combinedQuat);
+      }
+
       // Decay camera shake
       if (shakeIntensity.current > 0) {
         shakeIntensity.current = THREE.MathUtils.lerp(shakeIntensity.current, 0, 10 * delta);
@@ -76,19 +90,35 @@ export const GameScene: React.FC<GameSceneProps> = ({
 
     // 2. Update Hands
     const hands = handPositionsRef.current as HandPositions;
+    const camQuat = cameraQuaternionRef?.current || new THREE.Quaternion();
+
     if (hands) {
-      // Map screen-relative hand coordinates to first-person local view
+      // Map screen-relative hand coordinates to first-person local view rotated by camera orientation
       if (hands.left) {
-        vecHand.set(playerPos.x + hands.left.x * 0.8 - 0.3, playerPos.y + 1.2 + hands.left.y * 0.6, playerPos.z + hands.left.z * 0.8 - 0.6);
-        leftHandPosRef.current = vecHand.clone();
+        const localLeft = new THREE.Vector3(
+          hands.left.x * 0.8 - 0.3,
+          hands.left.y * 0.6,
+          hands.left.z * 0.8 - 0.6
+        );
+        localLeft.applyQuaternion(camQuat);
+        localLeft.add(new THREE.Vector3(playerPos.x, playerPos.y + 1.2, playerPos.z));
+
+        leftHandPosRef.current = localLeft;
         leftHandVelRef.current = hands.leftVelocity;
       } else {
         leftHandPosRef.current = null;
       }
 
       if (hands.right) {
-        vecHand.set(playerPos.x + hands.right.x * 0.8 + 0.3, playerPos.y + 1.2 + hands.right.y * 0.6, playerPos.z + hands.right.z * 0.8 - 0.6);
-        rightHandPosRef.current = vecHand.clone();
+        const localRight = new THREE.Vector3(
+          hands.right.x * 0.8 + 0.3,
+          hands.right.y * 0.6,
+          hands.right.z * 0.8 - 0.6
+        );
+        localRight.applyQuaternion(camQuat);
+        localRight.add(new THREE.Vector3(playerPos.x, playerPos.y + 1.2, playerPos.z));
+
+        rightHandPosRef.current = localRight;
         rightHandVelRef.current = hands.rightVelocity;
       } else {
         rightHandPosRef.current = null;

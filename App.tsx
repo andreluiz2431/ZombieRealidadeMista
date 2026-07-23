@@ -7,6 +7,8 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { GameStatus, PlayerWorldPos, ZombieData, HouseData, RemotePlayer, GPSCoords } from './types';
 import { useMediaPipe } from './hooks/useMediaPipe';
+import { useFullscreen } from './hooks/useFullscreen';
+import { useGyroscope } from './hooks/useGyroscope';
 import GameScene from './components/GameScene';
 import WebcamPreview from './components/WebcamPreview';
 import { RadarHUD } from './components/RadarHUD';
@@ -26,7 +28,12 @@ import {
   VolumeX,
   Navigation,
   Crosshair,
-  Skull
+  Skull,
+  Maximize,
+  Minimize,
+  Smartphone,
+  Eye,
+  RefreshCw
 } from 'lucide-react';
 
 // Default Safe House Shelters around origin
@@ -98,6 +105,18 @@ export const App: React.FC = () => {
   // Video Ref & MediaPipe Hook
   const videoRef = useRef<HTMLVideoElement>(null);
   const { isCameraReady, handPositionsRef, lastResultsRef, error: cameraError } = useMediaPipe(videoRef);
+
+  // Fullscreen & Gyroscope Hooks
+  const { isFullscreen, isSupported: isFullscreenSupported, toggleFullscreen, requestFullscreen } = useFullscreen();
+  const {
+    isGyroSupported,
+    isGyroEnabled,
+    setIsGyroEnabled,
+    hasPermission: hasGyroPermission,
+    cameraQuaternionRef,
+    requestGyroPermission,
+    calibrateGyro
+  } = useGyroscope();
 
   // -------------------------------------------------------------
   // 1. GPS Tracking System
@@ -379,8 +398,19 @@ export const App: React.FC = () => {
   // -------------------------------------------------------------
   // 6. Game Flow Controls
   // -------------------------------------------------------------
-  const startGame = () => {
+  const startGame = async () => {
     if (!isCameraReady) return;
+
+    // Request iOS Gyroscope permissions if applicable
+    await requestGyroPermission();
+
+    // Auto request fullscreen if available and not yet active
+    if (!isFullscreen && isFullscreenSupported) {
+      await requestFullscreen();
+    }
+
+    // Calibrate baseline gyro orientation
+    calibrateGyro();
 
     setHealth(100);
     setKills(0);
@@ -422,6 +452,7 @@ export const App: React.FC = () => {
             gameStatus={gameStatus}
             playerPos={playerPos}
             handPositionsRef={handPositionsRef}
+            cameraQuaternionRef={cameraQuaternionRef}
             zombies={zombies}
             houses={houses}
             remotePlayers={remotePlayers}
@@ -491,8 +522,32 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Radar & GPS Info */}
+            {/* Radar, GPS & View/Display Controls */}
             <div className="flex flex-col items-end gap-2">
+              {/* Quick Gyro & Fullscreen controls bar */}
+              <div className="pointer-events-auto flex items-center gap-1.5 bg-slate-950/80 p-1.5 rounded-xl border border-slate-800 backdrop-blur-md shadow-lg">
+                <button
+                  onClick={calibrateGyro}
+                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 border border-cyan-500/30 active:scale-95 transition-all"
+                  title="Calibrar Visão Central do Giroscópio"
+                >
+                  <Compass className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="hidden sm:inline">Calibrar Giroscópio</span>
+                </button>
+
+                <button
+                  onClick={toggleFullscreen}
+                  className="p-1.5 bg-slate-900 hover:bg-slate-800 text-emerald-300 rounded-lg text-xs font-mono font-bold flex items-center gap-1 border border-emerald-500/30 active:scale-95 transition-all"
+                  title={isFullscreen ? 'Sair da Tela Cheia' : 'Entrar em Tela Cheia'}
+                >
+                  {isFullscreen ? (
+                    <Minimize className="w-4 h-4 text-blue-400" />
+                  ) : (
+                    <Maximize className="w-4 h-4 text-emerald-400" />
+                  )}
+                </button>
+              </div>
+
               <RadarHUD
                 playerPos={playerPos}
                 zombies={zombies}
@@ -588,7 +643,11 @@ export const App: React.FC = () => {
             <p className="text-xs text-slate-400 mb-6 font-mono">APOCALIPSE EM PRIMEIRA PESSOA</p>
 
             {/* Instruction cards */}
-            <div className="space-y-3 text-xs text-slate-300 text-left bg-slate-900/80 p-4 rounded-xl border border-slate-800 mb-6">
+            <div className="space-y-2 text-xs text-slate-300 text-left bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 mb-4">
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-4 h-4 text-purple-400 shrink-0" />
+                <span><strong>Giroscópio & Rotação 360°:</strong> Mova o celular para olhar em todas as direções (ou arraste a tela no PC/Mobile).</span>
+              </div>
               <div className="flex items-center gap-2">
                 <MapPin className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span><strong>Deslocamento GPS:</strong> Seu movimento no mapa segue a localização do GPS real (ou teclas WASD/setas).</span>
@@ -604,6 +663,70 @@ export const App: React.FC = () => {
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span><strong>Casas de Segurança:</strong> Entre nas áreas de proteção verde para recuperar vida e se abrigar dos zombies.</span>
+              </div>
+            </div>
+
+            {/* Display & Gyro Settings Panel */}
+            <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 mb-4 flex flex-col gap-2 text-left text-xs">
+              {/* Fullscreen Option */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                  <Maximize className="w-4 h-4 text-emerald-400" />
+                  <span>Modo Tela Cheia:</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 ${
+                    isFullscreen
+                      ? 'bg-blue-600/40 border-blue-400 text-blue-200'
+                      : 'bg-slate-800 border-slate-700 text-emerald-400 hover:bg-slate-700'
+                  }`}
+                >
+                  {isFullscreen ? (
+                    <>
+                      <Minimize className="w-3.5 h-3.5" />
+                      <span>Ativada</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize className="w-3.5 h-3.5" />
+                      <span>Ativar Tela Cheia</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Gyroscope Option */}
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                  <Compass className="w-4 h-4 text-cyan-400" />
+                  <span>Sensor Giroscópio:</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setIsGyroEnabled(!isGyroEnabled)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold uppercase transition-all ${
+                      isGyroEnabled
+                        ? 'bg-emerald-950 border border-emerald-500/60 text-emerald-300'
+                        : 'bg-slate-800 border border-slate-700 text-slate-400'
+                    }`}
+                  >
+                    {isGyroEnabled ? 'ON' : 'OFF'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await requestGyroPermission();
+                      calibrateGyro();
+                    }}
+                    className="p-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg border border-slate-700 active:scale-95 transition-all"
+                    title="Calibrar posição atual como centro"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
 

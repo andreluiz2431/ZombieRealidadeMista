@@ -8,15 +8,13 @@ import { HandLandmarker, FilesetResolver, HandLandmarkerResult } from '@mediapip
 import * as THREE from 'three';
 
 // Mapping 2D normalized coordinates to 3D game world.
-const mapHandToWorld = (x: number, y: number): THREE.Vector3 => {
+const mapHandToWorld = (x: number, y: number, isMirrored: boolean = true): THREE.Vector3 => {
   const GAME_X_RANGE = 5; 
   const GAME_Y_RANGE = 3.5;
   const Y_OFFSET = 0.8;
 
-  // MediaPipe often returns mirrored X if facingMode is 'user'.
-  // We might need to invert X depending on the final behavior.
-  // For now, assuming standard mirroring where 0 is left-screen (user's right hand physically if mirrored).
-  const worldX = (0.5 - x) * GAME_X_RANGE; 
+  // When isMirrored is true: normalized x (0 to 1) from camera mapped directly so moving right moves right in 3D world
+  const worldX = isMirrored ? (x - 0.5) * GAME_X_RANGE : (0.5 - x) * GAME_X_RANGE; 
   const worldY = (1.0 - y) * GAME_Y_RANGE - (GAME_Y_RANGE / 2) + Y_OFFSET;
 
   const worldZ = -Math.max(0, worldY * 0.2);
@@ -31,6 +29,7 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [isCameraMirrored, setIsCameraMirrored] = useState<boolean>(true);
 
   const handPositionsRef = useRef<{
     left: THREE.Vector3 | null;
@@ -131,6 +130,27 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
       setSelectedDeviceId(null);
       setFacingMode(nextMode);
     }
+  };
+
+  // Select ultra-wide camera if available
+  const selectUltraWideCamera = async () => {
+    setIsCameraReady(false);
+    if (videoDevices.length > 0) {
+      const ultraWideDevice = videoDevices.find(d => {
+        const l = d.label.toLowerCase();
+        return l.includes('wide') || l.includes('ampla') || l.includes('0.5') || l.includes('ultra');
+      });
+
+      if (ultraWideDevice) {
+        setSelectedDeviceId(ultraWideDevice.deviceId);
+        setFacingMode('environment');
+        return true;
+      }
+    }
+    // Fallback: set facingMode to environment
+    setSelectedDeviceId(null);
+    setFacingMode('environment');
+    return false;
   };
 
   // 3. Start Camera Stream whenever model is loaded or camera selection changes
@@ -278,7 +298,7 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
           const isRight = classification.categoryName === 'Right';
 
           const tip = landmarks[8];
-          const worldPos = mapHandToWorld(tip.x, tip.y);
+          const worldPos = mapHandToWorld(tip.x, tip.y, isCameraMirrored);
 
           if (isRight) {
             newRight = worldPos;
@@ -324,7 +344,7 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
       isActive = false;
       stopCurrentCamera();
     };
-  }, [isModelLoaded, videoRef, facingMode, selectedDeviceId]);
+  }, [isModelLoaded, videoRef, facingMode, selectedDeviceId, isCameraMirrored]);
 
   return {
     isCameraReady,
@@ -334,6 +354,11 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
     error,
     facingMode,
     videoDevices,
-    switchCamera
+    selectedDeviceId,
+    setSelectedDeviceId,
+    isCameraMirrored,
+    setIsCameraMirrored,
+    switchCamera,
+    selectUltraWideCamera
   };
 };

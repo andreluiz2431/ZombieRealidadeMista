@@ -39,7 +39,12 @@ import {
   Camera,
   SwitchCamera,
   Footprints,
-  Activity
+  Activity,
+  BookOpen,
+  Info,
+  LogOut,
+  FlipHorizontal,
+  ZoomIn
 } from 'lucide-react';
 
 // Default Safe House Shelters around origin
@@ -115,7 +120,29 @@ export const App: React.FC = () => {
 
   // Video Ref & MediaPipe Hook
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { isCameraReady, handPositionsRef, lastResultsRef, error: cameraError, facingMode, switchCamera } = useMediaPipe(videoRef);
+  const {
+    isCameraReady,
+    handPositionsRef,
+    lastResultsRef,
+    error: cameraError,
+    facingMode,
+    videoDevices,
+    selectedDeviceId,
+    isCameraMirrored,
+    setIsCameraMirrored,
+    switchCamera,
+    selectUltraWideCamera
+  } = useMediaPipe(videoRef);
+
+  // Exit Room / Return to Menu
+  const exitRoom = () => {
+    setGameStatus(GameStatus.IDLE);
+    setHealth(MAX_PLAYER_HEALTH);
+    setKills(0);
+    setWave(1);
+    setStepCount(0);
+    setIsAutoWalking(false);
+  };
 
   // Fullscreen & Gyroscope Hooks
   const { isFullscreen, isSupported: isFullscreenSupported, toggleFullscreen, requestFullscreen } = useFullscreen();
@@ -540,6 +567,11 @@ export const App: React.FC = () => {
         isCameraReady={isCameraReady}
         facingMode={facingMode}
         onSwitchCamera={switchCamera}
+        isCameraMirrored={isCameraMirrored}
+        onToggleMirror={() => setIsCameraMirrored(!isCameraMirrored)}
+        videoDevices={videoDevices}
+        selectedDeviceId={selectedDeviceId}
+        onSelectUltraWide={selectUltraWideCamera}
       />
 
       {/* VR Cardboard Center Divider & Dual Eye Reticles */}
@@ -618,8 +650,17 @@ export const App: React.FC = () => {
 
             {/* Radar, GPS & View/Display Controls */}
             <div className="flex flex-col items-end gap-2">
-              {/* Quick Gyro, Fullscreen & VR Cardboard controls bar */}
+              {/* Quick Gyro, Fullscreen, Exit Room & VR Cardboard controls bar */}
               <div className="pointer-events-auto flex items-center gap-1.5 bg-slate-950/80 p-1.5 rounded-xl border border-slate-800 backdrop-blur-md shadow-lg">
+                <button
+                  onClick={exitRoom}
+                  className="px-2.5 py-1.5 bg-red-950/90 hover:bg-red-900 text-red-200 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 border border-red-500/50 active:scale-95 transition-all shadow-[0_0_12px_rgba(239,68,68,0.25)]"
+                  title="Sair da sala e voltar ao Menu Inicial"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-red-400" />
+                  <span>Sair da Sala</span>
+                </button>
+
                 <button
                   onClick={() => setIsStereoVR(!isStereoVR)}
                   className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 border active:scale-95 transition-all ${
@@ -800,47 +841,78 @@ export const App: React.FC = () => {
             <div className="space-y-2 text-xs text-slate-300 text-left bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 mb-4">
               <div className="flex items-center gap-2">
                 <Camera className="w-4 h-4 text-cyan-400 shrink-0" />
-                <span><strong>Escolha de Câmera:</strong> Escolha a câmera traseira para ver à sua frente no celular ou frontal para selfies.</span>
+                <span><strong>Escolha de Câmera:</strong> Traseira para ver o ambiente à frente ou frontal para modo selfie.</span>
               </div>
               <div className="flex items-center gap-2">
-                <Glasses className="w-4 h-4 text-purple-400 shrink-0" />
-                <span><strong>Google Cardboard VR:</strong> Visão estereoscópica 3D (duas imagens lado a lado) para usar com óculos de realidade virtual.</span>
+                <Footprints className="w-4 h-4 text-amber-400 shrink-0" />
+                <span><strong>Deslocamento (Acelerômetro ou GPS):</strong> Escolha se prefere caminhar com o celular dando passos/inclinando (Acelerômetro) ou se locomovendo fisicamente (GPS Real).</span>
               </div>
               <div className="flex items-center gap-2">
                 <Smartphone className="w-4 h-4 text-cyan-400 shrink-0" />
-                <span><strong>Giroscópio & Rotação 360°:</strong> Mova o celular para olhar em todas as direções (ou arraste a tela no PC/Mobile).</span>
+                <span><strong>Giroscópio & Visão 360°:</strong> Mova o celular em volta para olhar em todas as direções no mundo 3D.</span>
               </div>
               <div className="flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span><strong>Deslocamento GPS:</strong> Seu movimento no mapa segue a localização do GPS real (ou teclas WASD/setas).</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Crosshair className="w-4 h-4 text-amber-400 shrink-0" />
-                <span><strong>Mão Direita (Bastão):</strong> Movimente ou golpeie para atacar com o bastão.</span>
+                <Crosshair className="w-4 h-4 text-red-400 shrink-0" />
+                <span><strong>Ataque por Câmera:</strong> Posicione sua mão em frente à câmera para disparar ataques com o bastão de luz.</span>
               </div>
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span><strong>Casas de Segurança:</strong> Entre nas áreas de proteção verde para recuperar vida.</span>
+                <span><strong>Casas de Segurança:</strong> Entre nas áreas verdes indicadas no radar para curar e recuperar vida.</span>
               </div>
             </div>
 
             {/* Display & Gyro & VR & Camera Settings Panel */}
-            <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 mb-4 flex flex-col gap-2 text-left text-xs">
-              {/* Camera Selection Option */}
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 text-slate-200 font-bold">
-                  <Camera className="w-4 h-4 text-cyan-400" />
-                  <span>Câmera Principal:</span>
+            <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 mb-4 flex flex-col gap-2.5 text-left text-xs">
+              {/* Camera Selection & Ultra-Wide Option */}
+              <div className="flex flex-col gap-1.5 border-b border-slate-800/80 pb-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                    <Camera className="w-4 h-4 text-cyan-400" />
+                    <span>Câmera do Jogo:</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={selectUltraWideCamera}
+                      className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 border active:scale-95 bg-purple-900/80 hover:bg-purple-800 border-purple-500/50 text-purple-200"
+                      title="Ativar lente Ultra-Wide (Ampla 0.5x) para capturar melhor os movimentos das mãos"
+                    >
+                      <ZoomIn className="w-3.5 h-3.5 text-purple-300" />
+                      <span>Ultra Wide 0.5x</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => switchCamera()}
+                      className="px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 bg-slate-800 border-slate-700 text-cyan-300 hover:bg-slate-700"
+                      title="Alternar entre Câmera Frontal e Traseira"
+                    >
+                      <SwitchCamera className="w-3.5 h-3.5" />
+                      <span>{facingMode === 'user' ? 'Frontal' : 'Traseira'}</span>
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => switchCamera()}
-                  className="px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 bg-slate-800 border-slate-700 text-cyan-300 hover:bg-slate-700"
-                  title="Alternar entre Câmera Frontal e Traseira"
-                >
-                  <SwitchCamera className="w-3.5 h-3.5" />
-                  <span>{facingMode === 'user' ? 'Frontal (Selfie)' : 'Traseira (Atrás)'}</span>
-                </button>
+
+                {/* Mirror / Invert Hand Toggle */}
+                <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/50">
+                  <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                    <FlipHorizontal className="w-4 h-4 text-amber-400" />
+                    <span>Espelhar Orientação das Mãos:</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsCameraMirrored(!isCameraMirrored)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 border active:scale-95 ${
+                      isCameraMirrored
+                        ? 'bg-cyan-950 border-cyan-500/60 text-cyan-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-400'
+                    }`}
+                    title="Inverte horizontalmente a posição das mãos para combinar com a visualização intuitiva"
+                  >
+                    <FlipHorizontal className="w-3 h-3" />
+                    <span>{isCameraMirrored ? 'Espelhado (Invertido)' : 'Direto'}</span>
+                  </button>
+                </div>
               </div>
 
               {/* Google Cardboard VR Option */}
@@ -981,6 +1053,66 @@ export const App: React.FC = () => {
               </div>
             </div>
 
+            {/* Guia do Jogo & Instruções de Sobrevivência */}
+            <div className="bg-slate-900/90 p-3.5 sm:p-4 rounded-xl border border-amber-500/30 text-left mb-4 shadow-lg">
+              <div className="flex items-center gap-2 mb-2.5 pb-2 border-b border-slate-800">
+                <BookOpen className="w-4 h-4 text-amber-400 shrink-0" />
+                <h3 className="text-xs font-black uppercase text-amber-400 tracking-wider">
+                  Guia de Sobrevivência AR (Como Jogar)
+                </h3>
+              </div>
+
+              <div className="space-y-3 text-[11px] text-slate-300">
+                {/* 1. Deslocamento */}
+                <div className="flex items-start gap-2">
+                  <Footprints className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-white block">1. Como se Deslocar (Movimentação):</strong>
+                    <p className="text-slate-400 leading-relaxed mt-0.5">
+                      • <strong>Acelerômetro:</strong> Dê passos físicos com o celular na mão, incline levemente o aparelho para a frente ou toque nos botões <strong>"Dar Passo (+1m)"</strong> / <strong>"Auto-Caminhar"</strong>.<br />
+                      • <strong>GPS Real:</strong> Caminhe livremente ao ar livre; sua posição GPS real move seu sobrevivente no mapa 3D.<br />
+                      • <em>No Computador:</em> Use as teclas <strong>WASD</strong> ou as setas direcionais do teclado.
+                    </p>
+                  </div>
+                </div>
+
+                {/* 2. Olhar em Volta */}
+                <div className="flex items-start gap-2">
+                  <Compass className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-white block">2. Como Virar e Olhar em Volta (360°):</strong>
+                    <p className="text-slate-400 leading-relaxed mt-0.5">
+                      Gire o smartphone em qualquer direção (360°). O <strong>Giroscópio</strong> do celular rotaciona a câmera do jogo em tempo real. Compatível com óculos <strong>Google Cardboard VR</strong> para imersão 3D.
+                    </p>
+                  </div>
+                </div>
+
+                {/* 3. Como Atacar */}
+                <div className="flex items-start gap-2">
+                  <Crosshair className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-white block">3. Como Atacar com a Câmera:</strong>
+                    <p className="text-slate-400 leading-relaxed mt-0.5">
+                      Posicione a mão em frente à câmera frontal ou traseira. O rastreador detecta seus gestos e projeta o <strong>Bastão / Sabre de Luz</strong>. Movimente ou golpeie em direção aos zumbis para destruí-los!
+                    </p>
+                  </div>
+                </div>
+
+                {/* 4. Radar HUD e Safe Houses */}
+                <div className="flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-white block">4. Radar HUD, Indicadores & Casas de Segurança:</strong>
+                    <p className="text-slate-400 leading-relaxed mt-0.5">
+                      • <strong>Radar HUD:</strong> Bússola 360° no topo com indicação do Norte e distâncias.<br />
+                      • <strong>Inimigos (Pontos Vermelhos):</strong> Zumbis entram em estado de ataque ao se aproximar a menos de <strong>4 metros</strong> ou ao te avistar.<br />
+                      • <strong>Abrigos (Pontos Verdes):</strong> Entre na área da Casa de Segurança para regenerar sua vida e se proteger!
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Player name & Room input */}
             <div className="flex gap-2 mb-6 text-left">
               <div className="flex-1">
@@ -1032,13 +1164,23 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            <button
-              onClick={startGame}
-              className="w-full py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 uppercase tracking-wider"
-            >
-              <RotateCcw className="w-5 h-5" />
-              <span>TENTAR NOVAMENTE</span>
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={startGame}
+                className="w-full py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 uppercase tracking-wider active:scale-95"
+              >
+                <RotateCcw className="w-5 h-5" />
+                <span>TENTAR NOVAMENTE</span>
+              </button>
+
+              <button
+                onClick={exitRoom}
+                className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white font-bold rounded-xl border border-slate-700 transition-all flex items-center justify-center gap-2 uppercase tracking-wider text-xs active:scale-95"
+              >
+                <LogOut className="w-4 h-4 text-slate-400" />
+                <span>VOLTAR AO MENU INICIAL</span>
+              </button>
+            </div>
           </div>
         )}
       </div>

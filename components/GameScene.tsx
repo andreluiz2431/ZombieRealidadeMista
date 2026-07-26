@@ -96,15 +96,30 @@ export const GameScene: React.FC<GameSceneProps> = ({
     const camQuat = cameraQuaternionRef?.current || new THREE.Quaternion();
 
     if (hands) {
-      // Map screen-relative hand coordinates to first-person local view rotated by camera orientation
+      // Aspect ratio aware positioning (Portrait vs Landscape)
+      const aspect = state.viewport?.aspect || (window.innerWidth / window.innerHeight);
+      const isPortrait = aspect < 1;
+
+      // In Portrait mode (held vertically): bring hands closer to center (smaller X multiplier and offsets)
+      // In Landscape mode (held horizontally): wider X range for wide screen field of view
+      const xMult = isPortrait ? 1.1 : 1.7;
+      const xOffset = isPortrait ? 0.18 : 0.32;
+      const yMult = 0.9;
+
+      // Pushed forward away from body/camera so weapons are clearly visible in view and not blocking face
+      const zForward = isPortrait ? -1.25 : -1.1;
+
+      // Anchor Y at chest/waist height (1.0m above ground, comfortably below 1.6m eye level)
+      const anchorY = 1.0;
+
       if (hands.left) {
         const localLeft = new THREE.Vector3(
-          hands.left.x * 0.8 - 0.3,
-          hands.left.y * 0.6,
-          hands.left.z * 0.8 - 0.6
+          hands.left.x * xMult - xOffset,
+          hands.left.y * yMult,
+          zForward + hands.left.z * 0.4
         );
         localLeft.applyQuaternion(camQuat);
-        localLeft.add(new THREE.Vector3(playerPos.x, playerPos.y + 1.2, playerPos.z));
+        localLeft.add(new THREE.Vector3(playerPos.x, playerPos.y + anchorY, playerPos.z));
 
         leftHandPosRef.current = localLeft;
         leftHandVelRef.current = hands.leftVelocity;
@@ -114,12 +129,12 @@ export const GameScene: React.FC<GameSceneProps> = ({
 
       if (hands.right) {
         const localRight = new THREE.Vector3(
-          hands.right.x * 0.8 + 0.3,
-          hands.right.y * 0.6,
-          hands.right.z * 0.8 - 0.6
+          hands.right.x * xMult + xOffset,
+          hands.right.y * yMult,
+          zForward + hands.right.z * 0.4
         );
         localRight.applyQuaternion(camQuat);
-        localRight.add(new THREE.Vector3(playerPos.x, playerPos.y + 1.2, playerPos.z));
+        localRight.add(new THREE.Vector3(playerPos.x, playerPos.y + anchorY, playerPos.z));
 
         rightHandPosRef.current = localRight;
         rightHandVelRef.current = hands.rightVelocity;

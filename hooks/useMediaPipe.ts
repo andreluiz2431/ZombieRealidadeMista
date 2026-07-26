@@ -7,19 +7,16 @@ import React, { useEffect, useRef, useState } from 'react';
 import { HandLandmarker, FilesetResolver, HandLandmarkerResult } from '@mediapipe/tasks-vision';
 import * as THREE from 'three';
 
-// Mapping 2D normalized coordinates to 3D game world.
+// Mapping 2D normalized coordinates to 3D game view space.
 const mapHandToWorld = (x: number, y: number, isMirrored: boolean = true): THREE.Vector3 => {
-  const GAME_X_RANGE = 5; 
-  const GAME_Y_RANGE = 3.5;
-  const Y_OFFSET = 0.8;
+  // When isMirrored is true: moving hand right physically moves right in 3D screen view
+  const normX = isMirrored ? (x - 0.5) : (0.5 - x); 
+  const normY = (0.5 - y); // +0.5 top of camera frame, -0.5 bottom of camera frame
 
-  // When isMirrored is true: normalized x (0 to 1) from camera mapped directly so moving right moves right in 3D world
-  const worldX = isMirrored ? (x - 0.5) * GAME_X_RANGE : (0.5 - x) * GAME_X_RANGE; 
-  const worldY = (1.0 - y) * GAME_Y_RANGE - (GAME_Y_RANGE / 2) + Y_OFFSET;
+  // Subtle Z depth push when raising or extending hand
+  const normZ = normY * 0.3;
 
-  const worldZ = -Math.max(0, worldY * 0.2);
-
-  return new THREE.Vector3(worldX, Math.max(0.1, worldY), worldZ);
+  return new THREE.Vector3(normX, normY, normZ);
 };
 
 export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>) => {

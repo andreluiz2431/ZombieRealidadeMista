@@ -817,8 +817,9 @@ export const App: React.FC = () => {
       {/* ------------------------------------------------------------- */}
       {/* MENUS (START, LOADING, GAME OVER) */}
       {/* ------------------------------------------------------------- */}
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-auto z-30 overflow-y-auto p-3 sm:p-6">
-        {gameStatus === GameStatus.LOADING && (
+      {gameStatus !== GameStatus.PLAYING && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-auto z-40 overflow-y-auto p-3 sm:p-6 bg-black/40 backdrop-blur-sm">
+          {gameStatus === GameStatus.LOADING && (
           <div className="bg-slate-950/90 p-8 rounded-3xl flex flex-col items-center border border-blue-500/40 backdrop-blur-xl shadow-2xl max-w-sm text-center my-auto">
             <div className="animate-spin rounded-full h-14 w-14 border-t-4 border-b-4 border-blue-500 mb-4"></div>
             <h2 className="text-xl text-white font-bold mb-1">Inicializando Rastreador de Mãos</h2>
@@ -1184,6 +1185,7 @@ export const App: React.FC = () => {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };

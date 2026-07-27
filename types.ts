@@ -44,6 +44,8 @@ export interface ZombieData {
   rotation: number;
   hitTime?: number;
   damage: number;
+  wanderAngle?: number;
+  wanderTimer?: number;
 }
 
 export interface HouseData {
@@ -76,6 +78,17 @@ export interface HandPositions {
   right: THREE.Vector3 | null;
   leftVelocity: THREE.Vector3;
   rightVelocity: THREE.Vector3;
+}
+
+export interface DamageTextData {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  damage: number;
+  createdAt: number;
+  isKill?: boolean;
+  handType?: 'left' | 'right';
 }
 
 export const COLORS = {

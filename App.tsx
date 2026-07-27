@@ -5,7 +5,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { GameStatus, PlayerWorldPos, ZombieData, HouseData, RemotePlayer, GPSCoords } from './types';
+import { GameStatus, PlayerWorldPos, ZombieData, HouseData, RemotePlayer, GPSCoords, DamageTextData } from './types';
 import { useMediaPipe } from './hooks/useMediaPipe';
 import { useFullscreen } from './hooks/useFullscreen';
 import { useGyroscope } from './hooks/useGyroscope';
@@ -13,9 +13,12 @@ import { useAccelerometerMovement } from './hooks/useAccelerometerMovement';
 import GameScene from './components/GameScene';
 import WebcamPreview from './components/WebcamPreview';
 import { RadarHUD } from './components/RadarHUD';
+import { VirtualJoystick } from './components/VirtualJoystick';
 import { gpsToWorldCoords } from './utils/gps';
 import { multiplayerEngine } from './utils/multiplayer';
 import { soundEngine } from './utils/soundEngine';
+import { resolvePlayerCollision, isPositionColliding } from './utils/environmentData';
+import * as THREE from 'three';
 import {
   ShieldCheck,
   Zap,
@@ -34,6 +37,7 @@ import {
   Minimize,
   Smartphone,
   Eye,
+  EyeOff,
   RefreshCw,
   Glasses,
   Camera,
@@ -44,7 +48,13 @@ import {
   Info,
   LogOut,
   FlipHorizontal,
-  ZoomIn
+  ZoomIn,
+  Gamepad2,
+  Move,
+  Trophy,
+  Award,
+  TrendingUp,
+  Star
 } from 'lucide-react';
 
 // Default Safe House Shelters around origin
@@ -99,8 +109,14 @@ export const App: React.FC = () => {
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [useVirtualGps, setUseVirtualGps] = useState(false);
 
-  // Player World Position
+  // Player World Position (playerPos is smoothly lerped towards targetPlayerPosRef)
+  const playerPosRef = useRef<PlayerWorldPos>({ x: 0, y: 0, z: 0 });
+  const targetPlayerPosRef = useRef<PlayerWorldPos>({ x: 0, y: 0, z: 0 });
   const [playerPos, setPlayerPos] = useState<PlayerWorldPos>({ x: 0, y: 0, z: 0 });
+
+  // Joystick Mode State (Left thumbstick on-screen)
+  const [useJoystick, setUseJoystick] = useState<boolean>(false);
+  const joystickVectorRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Safe Zone Status
   const [isPlayerInSafeZone, setIsPlayerInSafeZone] = useState(false);
@@ -110,6 +126,34 @@ export const App: React.FC = () => {
   const [zombies, setZombies] = useState<ZombieData[]>([]);
   const [houses] = useState<HouseData[]>(DEFAULT_HOUSES);
 
+  // Score, Player Level & Damage Boost System
+  const [score, setScore] = useState<number>(0);
+  const [damageTexts, setDamageTexts] = useState<DamageTextData[]>([]);
+  const [levelUpNotice, setLevelUpNotice] = useState<{ visible: boolean; level: number }>({ visible: false, level: 1 });
+
+  // Player Level: Each 200 points = +1 Level. Level 1 starts at 0 points.
+  const playerLevel = Math.floor(score / 200) + 1;
+  const damageMultiplier = 1 + (playerLevel - 1) * 0.08;
+  const damageBonusPercent = Math.round((playerLevel - 1) * 8);
+  const xpInCurrentLevel = score % 200;
+
+  // Level up detection and banner audio effect
+  const prevLevelRef = useRef<number>(1);
+  useEffect(() => {
+    if (gameStatus === GameStatus.PLAYING && playerLevel > prevLevelRef.current) {
+      soundEngine.playLevelUp();
+      setLevelUpNotice({ visible: true, level: playerLevel });
+      const timer = setTimeout(() => {
+        setLevelUpNotice({ visible: false, level: playerLevel });
+      }, 3500);
+      prevLevelRef.current = playerLevel;
+      return () => clearTimeout(timer);
+    }
+    if (gameStatus === GameStatus.IDLE) {
+      prevLevelRef.current = 1;
+    }
+  }, [playerLevel, gameStatus]);
+
   // Multiplayer State
   const [roomId, setRoomId] = useState('apocalypse-sp');
   const [playerName, setPlayerName] = useState(() => `Sobrevivente_${Math.floor(1000 + Math.random() * 9000)}`);
@@ -118,8 +162,17 @@ export const App: React.FC = () => {
   // VR Stereoscopic (Google Cardboard) Mode State
   const [isStereoVR, setIsStereoVR] = useState<boolean>(false);
 
+  // Toggle Joystick Mode helper (disables Cardboard when Joystick is active)
+  const toggleJoystickMode = (active: boolean) => {
+    setUseJoystick(active);
+    if (active) {
+      setIsStereoVR(false); // VR Cardboard requires hands-free, so disable when joystick is active
+    }
+  };
+
   // Video Ref & MediaPipe Hook
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [isCameraPreviewVisible, setIsCameraPreviewVisible] = useState<boolean>(true);
   const {
     isCameraReady,
     handPositionsRef,
@@ -140,8 +193,15 @@ export const App: React.FC = () => {
     setHealth(MAX_PLAYER_HEALTH);
     setKills(0);
     setWave(1);
-    setStepCount(0);
+    setScore(0);
+    setDamageTexts([]);
+    setLevelUpNotice({ visible: false, level: 1 });
+    prevLevelRef.current = 1;
+    resetStepCount();
     setIsAutoWalking(false);
+    playerPosRef.current = { x: 0, y: 0, z: 0 };
+    targetPlayerPosRef.current = { x: 0, y: 0, z: 0 };
+    setPlayerPos({ x: 0, y: 0, z: 0 });
   };
 
   // Fullscreen & Gyroscope Hooks
@@ -159,18 +219,27 @@ export const App: React.FC = () => {
   // Movement Mode State ('accelerometer' or 'gps')
   const [movementMode, setMovementMode] = useState<'accelerometer' | 'gps'>('accelerometer');
 
-  // Accelerometer step movement handler
+  // Accelerometer step movement handler (moves target position; lerped smoothly below)
   const handleAccelerometerStep = useCallback(({ dx, dz }: { dx: number; dz: number }) => {
-    setPlayerPos((prev) => ({
-      x: prev.x + dx,
-      y: prev.y,
-      z: prev.z + dz
-    }));
+    if (useJoystick) return; // Joystick takes over movement when enabled
+    const proposedX = targetPlayerPosRef.current.x + dx;
+    const proposedZ = targetPlayerPosRef.current.z + dz;
+    const safeTarget = resolvePlayerCollision(
+      targetPlayerPosRef.current.x,
+      targetPlayerPosRef.current.z,
+      proposedX,
+      proposedZ,
+      0.5
+    );
+    targetPlayerPosRef.current.x = safeTarget.x;
+    targetPlayerPosRef.current.z = safeTarget.z;
     soundEngine.playFootstep();
-  }, []);
+  }, [useJoystick]);
 
   const {
     stepCount,
+    setStepCount,
+    resetStepCount,
     isMotionSupported,
     hasMotionPermission,
     requestMotionPermission,
@@ -178,11 +247,107 @@ export const App: React.FC = () => {
     isAutoWalking,
     setIsAutoWalking
   } = useAccelerometerMovement({
-    enabled: movementMode === 'accelerometer',
+    enabled: movementMode === 'accelerometer' && !useJoystick,
     gameStatus,
     cameraQuaternionRef,
     onStep: handleAccelerometerStep
   });
+
+  // -------------------------------------------------------------
+  // Smooth Player Movement Animation Loop (Lerping playerPosRef -> targetPlayerPosRef & Joystick)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    if (gameStatus !== GameStatus.PLAYING) return;
+
+    let animId: number;
+    let lastTime = performance.now();
+
+    const updateMovementLoop = (now: number) => {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+
+      // Handle Virtual Joystick Locomotion (if active & thumbstick displaced)
+      if (useJoystick && (joystickVectorRef.current.x !== 0 || joystickVectorRef.current.y !== 0)) {
+        const jx = joystickVectorRef.current.x; // > 0 right, < 0 left
+        const jy = joystickVectorRef.current.y; // < 0 up (forward), > 0 down (backward)
+
+        const JOYSTICK_SPEED = 2.2; // Smooth, natural walking speed (2.2 m/s)
+
+        // Determine orientation from camera orientation or default world
+        let fX = 0, fZ = -1;
+        let rX = 1, rZ = 0;
+
+        if (cameraQuaternionRef.current) {
+          const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternionRef.current);
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cameraQuaternionRef.current);
+
+          const fLen = Math.hypot(forward.x, forward.z);
+          const rLen = Math.hypot(right.x, right.z);
+
+          if (fLen > 0.001) {
+            fX = forward.x / fLen;
+            fZ = forward.z / fLen;
+          }
+          if (rLen > 0.001) {
+            rX = right.x / rLen;
+            rZ = right.z / rLen;
+          }
+        }
+
+        // Pushing UP (jy < 0) moves FORWARD into camera view direction
+        const forwardFactor = -jy;
+        const sideFactor = jx;
+
+        const moveDX = (rX * sideFactor + fX * forwardFactor) * JOYSTICK_SPEED * dt;
+        const moveDZ = (rZ * sideFactor + fZ * forwardFactor) * JOYSTICK_SPEED * dt;
+
+        const proposedX = targetPlayerPosRef.current.x + moveDX;
+        const proposedZ = targetPlayerPosRef.current.z + moveDZ;
+
+        const safeTarget = resolvePlayerCollision(
+          targetPlayerPosRef.current.x,
+          targetPlayerPosRef.current.z,
+          proposedX,
+          proposedZ,
+          0.5
+        );
+
+        targetPlayerPosRef.current.x = safeTarget.x;
+        targetPlayerPosRef.current.z = safeTarget.z;
+      }
+
+      // Smoothly lerp playerPosRef towards targetPlayerPosRef with collision safety
+      const curr = playerPosRef.current;
+      const target = targetPlayerPosRef.current;
+
+      const dx = target.x - curr.x;
+      const dz = target.z - curr.z;
+      const dist = Math.hypot(dx, dz);
+
+      let nextX = curr.x;
+      let nextZ = curr.z;
+
+      if (dist > 0.0001) {
+        const lerpFactor = Math.min(1, dt * 10);
+        nextX += dx * lerpFactor;
+        nextZ += dz * lerpFactor;
+      } else {
+        nextX = target.x;
+        nextZ = target.z;
+      }
+
+      const safeNext = resolvePlayerCollision(curr.x, curr.z, nextX, nextZ, 0.5);
+      curr.x = safeNext.x;
+      curr.z = safeNext.z;
+
+      setPlayerPos({ x: curr.x, y: curr.y, z: curr.z });
+
+      animId = requestAnimationFrame(updateMovementLoop);
+    };
+
+    animId = requestAnimationFrame(updateMovementLoop);
+    return () => cancelAnimationFrame(animId);
+  }, [gameStatus, useJoystick, cameraQuaternionRef]);
 
   // -------------------------------------------------------------
   // 1. GPS Tracking System
@@ -217,9 +382,9 @@ export const App: React.FC = () => {
         });
 
         // Update player world position if origin exists, not in manual override, and in GPS mode
-        if (originGps && !useVirtualGps && movementMode === 'gps') {
+        if (originGps && !useVirtualGps && movementMode === 'gps' && !useJoystick) {
           const wPos = gpsToWorldCoords(originGps.lat, originGps.lng, coords.latitude, coords.longitude);
-          setPlayerPos(wPos);
+          targetPlayerPosRef.current = wPos;
         }
       },
       (err) => {
@@ -235,22 +400,33 @@ export const App: React.FC = () => {
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [originGps, useVirtualGps, movementMode]);
+  }, [originGps, useVirtualGps, movementMode, useJoystick]);
 
-  // Keyboard / Virtual Joystick movement for indoor or testing play
+  // Keyboard movement for testing play
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (gameStatus !== GameStatus.PLAYING) return;
       const STEP = 1.2;
 
-      setPlayerPos((prev) => {
-        let { x, y, z } = prev;
-        if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') z -= STEP;
-        if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') z += STEP;
-        if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') x -= STEP;
-        if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') x += STEP;
-        return { x, y, z };
-      });
+      let dx = 0, dz = 0;
+      if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') dz -= STEP;
+      if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') dz += STEP;
+      if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') dx -= STEP;
+      if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') dx += STEP;
+
+      if (dx !== 0 || dz !== 0) {
+        const proposedX = targetPlayerPosRef.current.x + dx;
+        const proposedZ = targetPlayerPosRef.current.z + dz;
+        const safeTarget = resolvePlayerCollision(
+          targetPlayerPosRef.current.x,
+          targetPlayerPosRef.current.z,
+          proposedX,
+          proposedZ,
+          0.5
+        );
+        targetPlayerPosRef.current.x = safeTarget.x;
+        targetPlayerPosRef.current.z = safeTarget.z;
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -285,6 +461,12 @@ export const App: React.FC = () => {
     }
   }, [playerPos, houses, isPlayerInSafeZone]);
 
+  // Safe zone ref sync for zombie AI loop
+  const isPlayerInSafeZoneRef = useRef(isPlayerInSafeZone);
+  useEffect(() => {
+    isPlayerInSafeZoneRef.current = isPlayerInSafeZone;
+  }, [isPlayerInSafeZone]);
+
   // Health Regeneration System (Rapid inside Safe House, slow passive outside)
   useEffect(() => {
     if (gameStatus !== GameStatus.PLAYING) return;
@@ -301,26 +483,25 @@ export const App: React.FC = () => {
   }, [isPlayerInSafeZone, gameStatus]);
 
   // -------------------------------------------------------------
-  // 3. Zombie Wave & AI System
-  // -------------------------------------------------------------
-  // 3. Zombie Wave & AI System (Calm exploration mode with 4m proximity alert)
+  // 3. Zombie Wave & AI System (Proximity Chasing & Random Wandering)
   // -------------------------------------------------------------
   const spawnZombieWave = useCallback((waveNum: number) => {
     const newZombies: ZombieData[] = [];
-    // Reduced enemy count: Wave 1 = 2 zombies, Wave 2 = 3 zombies, etc.
-    const count = 2 + waveNum;
+    const count = 3 + waveNum;
+    const pPos = playerPosRef.current;
 
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
-      // Spawn further away so player can explore freely (30 to 55 meters)
-      const dist = 30 + Math.random() * 25;
-      const x = playerPos.x + Math.sin(angle) * dist;
-      const z = playerPos.z + Math.cos(angle) * dist;
+      // Spawn at active wave distance (10 to 16 meters)
+      const dist = 10 + Math.random() * 6;
+      const x = pPos.x + Math.sin(angle) * dist;
+      const z = pPos.z + Math.cos(angle) * dist;
 
       const rand = Math.random();
       const type: 'walker' | 'runner' | 'brute' = rand > 0.8 ? 'runner' : rand > 0.92 ? 'brute' : 'walker';
       const maxHealth = type === 'brute' ? 200 : type === 'runner' ? 60 : 100;
       const speed = type === 'runner' ? 2.6 : type === 'brute' ? 1.2 : 1.6;
+      const initialRotation = Math.atan2(pPos.x - x, pPos.z - z);
 
       newZombies.push({
         id: `zombie-${waveNum}-${i}-${Date.now()}`,
@@ -331,68 +512,103 @@ export const App: React.FC = () => {
         maxHealth,
         speed,
         type,
-        state: 'idle', // Start idle so player can explore without instant horde attack
-        rotation: Math.random() * Math.PI * 2,
-        damage: type === 'brute' ? 20 : 10
+        state: 'chasing', // Spawn actively chasing the player as in standard wave survival
+        rotation: initialRotation,
+        damage: type === 'brute' ? 20 : 10,
+        wanderAngle: initialRotation,
+        wanderTimer: 1 + Math.random() * 3
       });
     }
 
     setZombies(newZombies);
-  }, [playerPos]);
+  }, []);
 
-  // Zombie Movement Frame Loop
+  // Zombie Movement & AI Frame Loop
   useEffect(() => {
     if (gameStatus !== GameStatus.PLAYING) return;
 
     const interval = setInterval(() => {
       setZombies((prevZombies) => {
         let aliveCount = 0;
+        const currentP = playerPosRef.current;
+        const inSafeZone = isPlayerInSafeZoneRef.current;
 
         const updated = prevZombies.map((z) => {
           if (z.state === 'dead') return z;
           aliveCount++;
 
-          const dx = playerPos.x - z.x;
-          const dz = playerPos.z - z.z;
-          const distToPlayer = Math.sqrt(dx * dx + dz * dz);
-
+          const dx = currentP.x - z.x;
+          const dz = currentP.z - z.z;
+          const distToPlayer = Math.hypot(dx, dz);
           const angleToPlayer = Math.atan2(dx, dz);
 
           let state: 'idle' | 'chasing' | 'attacking' | 'hit' | 'dead' = z.state;
+          let wanderAngle = z.wanderAngle ?? Math.random() * Math.PI * 2;
+          let wanderTimer = (z.wanderTimer ?? 2) - 0.15; // interval is 150ms
 
-          // Proximity & Sight detection trigger:
-          // 1. Player gets within 4.0 meters (or attacked)
-          // 2. Or zombie is facing player within 7.0 meters
-          const isFacingPlayer = Math.abs(z.rotation - angleToPlayer) < 1.2;
-          const isTriggered = distToPlayer <= 4.0 || (distToPlayer <= 7.0 && isFacingPlayer) || z.state === 'hit';
+          // Detection & Pursuit Triggers (Halved):
+          // 1. Idle zombies spot player within 7.5 meters (or 10.5 meters if facing player)
+          // 2. Chasing zombies continue tracking player up to 16.25 meters away
+          const angleDiff = Math.abs(z.rotation - angleToPlayer);
+          const isFacingPlayer = angleDiff < 1.5 || angleDiff > (Math.PI * 2 - 1.5);
+          const isTriggered = distToPlayer <= 7.5 || (distToPlayer <= 10.5 && isFacingPlayer) || z.state === 'hit';
 
           if (state === 'idle') {
-            if (isTriggered) {
-              state = 'chasing'; // Zombie spots or detects player!
+            if (isTriggered && !inSafeZone) {
+              state = 'chasing'; // Zombie spots player!
             }
           } else if (state === 'chasing' || state === 'attacking' || state === 'hit') {
-            if (distToPlayer <= 2.0) {
+            if (inSafeZone) {
+              if (distToPlayer > 6.0) {
+                state = 'idle';
+                wanderAngle = angleToPlayer + Math.PI; // Return to wandering away from shelter
+              } else {
+                state = 'chasing';
+              }
+            } else if (distToPlayer <= 2.2) {
               state = 'attacking';
+            } else if (distToPlayer > 16.25) {
+              // Player escaped (over 16.25 meters away)
+              state = 'idle';
             } else {
               state = 'chasing';
             }
           }
 
-          // Move towards player ONLY if activated ('chasing' or 'attacking')
-          let moveSpeed = 0;
           let newX = z.x;
           let newZ = z.z;
           let newRotation = z.rotation;
 
           if (state === 'chasing' || state === 'attacking') {
-            moveSpeed = z.speed * 0.15;
+            const moveSpeed = z.speed * 0.15;
             // Hold outside safe house perimeter
-            if (isPlayerInSafeZone && distToPlayer < 8) {
-              moveSpeed = 0;
+            if (!inSafeZone || distToPlayer >= 8) {
+              newX = z.x + Math.sin(angleToPlayer) * moveSpeed;
+              newZ = z.z + Math.cos(angleToPlayer) * moveSpeed;
             }
-            newX = z.x + Math.sin(angleToPlayer) * moveSpeed;
-            newZ = z.z + Math.cos(angleToPlayer) * moveSpeed;
             newRotation = angleToPlayer;
+          } else if (state === 'idle') {
+            // WANDERING MODE: Walk slowly in wanderAngle direction
+            if (wanderTimer <= 0) {
+              wanderAngle = wanderAngle + (Math.random() - 0.5) * 1.5;
+              wanderTimer = 2 + Math.random() * 3;
+            }
+
+            const wanderSpeed = z.speed * 0.05; // Slow shuffling wander speed
+            const proposedX = z.x + Math.sin(wanderAngle) * wanderSpeed;
+            const proposedZ = z.z + Math.cos(wanderAngle) * wanderSpeed;
+
+            // Turn around if proposed wander position hits a building or map edge
+            if (isPositionColliding(proposedX, proposedZ, 0.6) || Math.hypot(proposedX, proposedZ) > 85) {
+              wanderAngle += Math.PI;
+              newX = z.x;
+              newZ = z.z;
+            } else {
+              newX = proposedX;
+              newZ = proposedZ;
+            }
+
+            newRotation = wanderAngle;
           }
 
           return {
@@ -400,7 +616,9 @@ export const App: React.FC = () => {
             x: newX,
             z: newZ,
             rotation: newRotation,
-            state
+            state,
+            wanderAngle,
+            wanderTimer
           };
         });
 
@@ -425,25 +643,60 @@ export const App: React.FC = () => {
     }, 150);
 
     return () => clearInterval(interval);
-  }, [gameStatus, playerPos, isPlayerInSafeZone, spawnZombieWave]);
+  }, [gameStatus, spawnZombieWave]);
 
   // -------------------------------------------------------------
-  // 4. Combat Handlers
+  // 4. Combat Handlers (Level Damage Scaling & Score Calculation)
   // -------------------------------------------------------------
-  const handleZombieHit = useCallback((zombieId: string, damage: number) => {
-    setZombies((prev) =>
-      prev.map((z) => {
-        if (z.id !== zombieId || z.state === 'dead') return z;
+  const handleZombieHit = useCallback((
+    zombieId: string,
+    baseDamage: number,
+    handType: 'left' | 'right',
+    zombiePos: { x: number; y: number; z: number }
+  ) => {
+    setScore((currentScore) => {
+      const currentLevel = Math.floor(currentScore / 200) + 1;
+      const mult = 1 + (currentLevel - 1) * 0.08;
+      const actualDamage = Math.round(baseDamage * mult);
 
-        const newHealth = z.health - damage;
-        if (newHealth <= 0) {
-          setKills((k) => k + 1);
-          return { ...z, health: 0, state: 'dead' };
-        }
+      let addedScore = 15; // Hit score bonus
 
-        return { ...z, health: newHealth, state: 'hit' };
-      })
-    );
+      setZombies((prev) =>
+        prev.map((z) => {
+          if (z.id !== zombieId || z.state === 'dead') return z;
+
+          const newHealth = z.health - actualDamage;
+          const isKill = newHealth <= 0;
+
+          if (isKill) {
+            setKills((k) => k + 1);
+            const killBonus = z.type === 'brute' ? 250 : z.type === 'runner' ? 150 : 100;
+            addedScore += killBonus;
+          }
+
+          // Spawn 3D floating damage text
+          const newPopup: DamageTextData = {
+            id: `dmg-${Date.now()}-${Math.random()}`,
+            x: zombiePos.x + (Math.random() - 0.5) * 0.3,
+            y: zombiePos.y + 0.2,
+            z: zombiePos.z + (Math.random() - 0.5) * 0.3,
+            damage: actualDamage,
+            createdAt: Date.now(),
+            isKill,
+            handType
+          };
+          setDamageTexts((dt) => [...dt.slice(-12), newPopup]);
+
+          if (isKill) {
+            return { ...z, health: 0, state: 'dead' };
+          }
+
+          return { ...z, health: newHealth, state: 'hit' };
+        })
+      );
+
+      return currentScore + addedScore;
+    });
   }, []);
 
   const handlePlayerDamaged = useCallback((damage: number) => {
@@ -511,6 +764,10 @@ export const App: React.FC = () => {
     setHealth(MAX_PLAYER_HEALTH);
     setKills(0);
     setWave(1);
+    setScore(0);
+    setDamageTexts([]);
+    setLevelUpNotice({ visible: false, level: 1 });
+    prevLevelRef.current = 1;
     setGameStatus(GameStatus.PLAYING);
 
     spawnZombieWave(1);
@@ -556,6 +813,7 @@ export const App: React.FC = () => {
             isPlayerInSafeZone={isPlayerInSafeZone}
             onZombieHit={handleZombieHit}
             onPlayerDamaged={handlePlayerDamaged}
+            damageTexts={damageTexts}
           />
         )}
       </Canvas>
@@ -572,6 +830,8 @@ export const App: React.FC = () => {
         videoDevices={videoDevices}
         selectedDeviceId={selectedDeviceId}
         onSelectUltraWide={selectUltraWideCamera}
+        isCameraPreviewVisible={isCameraPreviewVisible}
+        onToggleCameraPreviewVisible={setIsCameraPreviewVisible}
       />
 
       {/* VR Cardboard Center Divider & Dual Eye Reticles */}
@@ -597,6 +857,16 @@ export const App: React.FC = () => {
       {/* ------------------------------------------------------------- */}
       {gameStatus === GameStatus.PLAYING && (
         <div className="absolute inset-0 pointer-events-none p-4 flex flex-col justify-between z-20">
+          {/* Virtual Joystick (Left Thumbstick for movement) */}
+          {useJoystick && (
+            <div className="absolute bottom-6 left-6 z-30 pointer-events-auto">
+              <VirtualJoystick
+                onMove={(vec) => {
+                  joystickVectorRef.current = vec;
+                }}
+              />
+            </div>
+          )}
           {/* Top Header */}
           <div className="flex justify-between items-start w-full">
             {/* Health & Status */}
@@ -637,14 +907,44 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Kills & Wave Score */}
-            <div className="flex flex-col items-center">
-              <div className="bg-slate-950/90 px-6 py-2 rounded-2xl border border-red-500/30 backdrop-blur-md text-center shadow-[0_0_15px_rgba(239,68,68,0.2)]">
-                <div className="flex items-center gap-2 justify-center text-red-400 font-black tracking-widest text-xl">
-                  <Skull className="w-6 h-6 text-red-500 animate-bounce" />
-                  <span>{kills} ZOMBIES ELIMINADOS</span>
+            {/* Kills, Score, Level & Wave Stats Header */}
+            <div className="flex flex-col items-center gap-1.5">
+              <div className="bg-slate-950/95 px-5 py-2.5 rounded-2xl border border-amber-500/40 backdrop-blur-md text-center shadow-[0_0_20px_rgba(245,158,11,0.2)] flex flex-col gap-1.5">
+                {/* Top Row: Score, Level Badge & Kills */}
+                <div className="flex items-center gap-3 justify-center">
+                  {/* Score Counter */}
+                  <div className="flex items-center gap-1.5 text-yellow-400 font-extrabold text-sm sm:text-base font-mono">
+                    <Trophy className="w-4 h-4 text-yellow-400 animate-pulse shrink-0" />
+                    <span>{score.toLocaleString()} PTS</span>
+                  </div>
+
+                  {/* Level & Damage Badge */}
+                  <div className="bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 font-black px-2.5 py-0.5 rounded-lg text-xs flex items-center gap-1.5 shadow-md">
+                    <Award className="w-3.5 h-3.5 text-slate-950 shrink-0" />
+                    <span>NÍVEL {playerLevel}</span>
+                    <span className="text-[10px] bg-black/25 px-1.5 py-0.5 rounded font-bold text-slate-950">
+                      +{damageBonusPercent}% DANO
+                    </span>
+                  </div>
+
+                  {/* Kills Badge */}
+                  <div className="flex items-center gap-1 text-red-400 font-black text-xs sm:text-sm font-mono">
+                    <Skull className="w-4 h-4 text-red-500 shrink-0" />
+                    <span>{kills} KILLS</span>
+                  </div>
                 </div>
-                <div className="text-xs text-slate-400 mt-0.5 font-mono">ONDA DE ATAQUE #{wave}</div>
+
+                {/* Bottom Row: XP Progress Bar & Wave Counter */}
+                <div className="w-full flex items-center gap-2 text-[10px] text-slate-400 font-mono">
+                  <span className="whitespace-nowrap text-amber-300 font-bold">XP: {xpInCurrentLevel}/200</span>
+                  <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                    <div
+                      className="h-full bg-gradient-to-r from-amber-500 to-yellow-300 transition-all duration-300"
+                      style={{ width: `${(xpInCurrentLevel / 200) * 100}%` }}
+                    />
+                  </div>
+                  <span className="text-slate-300 font-bold">ONDA #{wave}</span>
+                </div>
               </div>
             </div>
 
@@ -814,6 +1114,22 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {/* Level Up Center Screen Floating Notification */}
+      {gameStatus === GameStatus.PLAYING && levelUpNotice.visible && (
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 pointer-events-none animate-bounce">
+          <div className="bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 px-6 py-3 rounded-2xl border-2 border-yellow-100 shadow-[0_0_40px_rgba(245,158,11,0.9)] flex flex-col items-center justify-center font-black">
+            <div className="flex items-center gap-2 text-lg sm:text-xl tracking-wider uppercase">
+              <Trophy className="w-6 h-6 text-slate-950 shrink-0" />
+              <span>NÍVEL SUBIU! NÍVEL {levelUpNotice.level}</span>
+              <Sparkles className="w-6 h-6 text-slate-950 shrink-0" />
+            </div>
+            <div className="text-xs font-mono font-extrabold text-slate-900 mt-0.5">
+              ⚡ BÔNUS DE DANO AUMENTADO PARA +{(levelUpNotice.level - 1) * 8}% DE DANO TOTAL!
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ------------------------------------------------------------- */}
       {/* MENUS (START, LOADING, GAME OVER) */}
       {/* ------------------------------------------------------------- */}
@@ -914,6 +1230,62 @@ export const App: React.FC = () => {
                     <span>{isCameraMirrored ? 'Espelhado (Invertido)' : 'Direto'}</span>
                   </button>
                 </div>
+
+                {/* Pop-up de Câmera na Tela Toggle */}
+                <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-800/50">
+                  <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                    <Eye className="w-4 h-4 text-cyan-400" />
+                    <span>Pop-up da Câmera na Tela:</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsCameraPreviewVisible(!isCameraPreviewVisible)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 ${
+                      isCameraPreviewVisible
+                        ? 'bg-cyan-950 border-cyan-500/60 text-cyan-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-400'
+                    }`}
+                    title="Exibir ou ocultar a janela pop-up de pré-visualização da câmera na tela"
+                  >
+                    {isCameraPreviewVisible ? (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Exibir (Visível)</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5 text-red-400" />
+                        <span>Ocultar (Oculto)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Virtual Joystick Option */}
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                <div className="flex flex-col text-left">
+                  <div className="flex items-center gap-1.5 text-slate-200 font-bold">
+                    <Gamepad2 className="w-4 h-4 text-cyan-400" />
+                    <span>Joystick Virtual (Mão Esquerda):</span>
+                  </div>
+                  <span className="text-[10px] text-slate-400 mt-0.5">
+                    Movimenta o personagem na tela pelo polegar esquerdo. Desativa Acelerômetro, GPS e VR Cardboard.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleJoystickMode(!useJoystick)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 shrink-0 ${
+                    useJoystick
+                      ? 'bg-cyan-950 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.4)]'
+                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
+                  }`}
+                  title="Ativar direcional analógico na tela"
+                >
+                  <Gamepad2 className="w-3.5 h-3.5" />
+                  <span>{useJoystick ? 'Ativado (ON)' : 'Desativado'}</span>
+                </button>
               </div>
 
               {/* Google Cardboard VR Option */}
@@ -922,27 +1294,33 @@ export const App: React.FC = () => {
                   <Glasses className="w-4 h-4 text-purple-400" />
                   <span>Google Cardboard (Óculos VR):</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setIsStereoVR(!isStereoVR)}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 ${
-                    isStereoVR
-                      ? 'bg-purple-900/90 border-purple-400 text-purple-200 shadow-[0_0_12px_rgba(168,85,247,0.4)]'
-                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
-                  }`}
-                >
-                  {isStereoVR ? (
-                    <>
-                      <Eye className="w-3.5 h-3.5 text-purple-300" />
-                      <span>VR Ativado (Dual)</span>
-                    </>
-                  ) : (
-                    <>
-                      <Glasses className="w-3.5 h-3.5" />
-                      <span>Desativado (Normal)</span>
-                    </>
-                  )}
-                </button>
+                {useJoystick ? (
+                  <span className="text-[10px] text-purple-300/70 font-mono bg-purple-950/60 px-2 py-1 rounded border border-purple-800/50">
+                    Indisponível no modo Joystick
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsStereoVR(!isStereoVR)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 ${
+                      isStereoVR
+                        ? 'bg-purple-900/90 border-purple-400 text-purple-200 shadow-[0_0_12px_rgba(168,85,247,0.4)]'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
+                    }`}
+                  >
+                    {isStereoVR ? (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-purple-300" />
+                        <span>VR Ativado (Dual)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Glasses className="w-3.5 h-3.5" />
+                        <span>Desativado (Normal)</span>
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
 
               {/* Fullscreen Option */}
@@ -1156,8 +1534,16 @@ export const App: React.FC = () => {
 
             <div className="bg-slate-900/80 p-4 rounded-xl border border-slate-800 space-y-2 mb-6 text-sm font-mono">
               <div className="flex justify-between">
+                <span className="text-slate-400">Score Conquistado:</span>
+                <span className="text-yellow-400 font-bold">{score.toLocaleString()} PTS</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Nível Alcançado:</span>
+                <span className="text-amber-400 font-bold">NÍVEL {playerLevel} (+{damageBonusPercent}% DANO)</span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-slate-400">Zombies Mortos:</span>
-                <span className="text-amber-400 font-bold">{kills}</span>
+                <span className="text-red-400 font-bold">{kills}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Onda Alcançada:</span>

@@ -23,6 +23,8 @@ interface WebcamPreviewProps {
     selectedDeviceId?: string | null;
     onSelectDevice?: (deviceId: string) => void;
     onSelectUltraWide?: () => void;
+    isCameraPreviewVisible?: boolean;
+    onToggleCameraPreviewVisible?: (visible: boolean) => void;
 }
 
 const HAND_CONNECTIONS = [
@@ -45,11 +47,21 @@ const WebcamPreview: React.FC<WebcamPreviewProps> = ({
     videoDevices = [],
     selectedDeviceId = null,
     onSelectDevice,
-    onSelectUltraWide
+    onSelectUltraWide,
+    isCameraPreviewVisible = true,
+    onToggleCameraPreviewVisible
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [previewSize, setPreviewSize] = useState<PreviewSize>('small');
-    const [showDeviceMenu, setShowDeviceMenu] = useState(false);
+
+    // Sync preview size with parent visibility preference
+    useEffect(() => {
+        if (!isCameraPreviewVisible) {
+            setPreviewSize('hidden');
+        } else if (previewSize === 'hidden') {
+            setPreviewSize('small');
+        }
+    }, [isCameraPreviewVisible]);
 
     useEffect(() => {
         if (!isCameraReady || previewSize === 'hidden') return;
@@ -133,110 +145,116 @@ const WebcamPreview: React.FC<WebcamPreviewProps> = ({
 
     if (!isCameraReady) return null;
 
-    // Cycle through sizes
-    const cycleSize = () => {
-        if (previewSize === 'normal') setPreviewSize('small');
-        else if (previewSize === 'small') setPreviewSize('micro');
-        else if (previewSize === 'micro') setPreviewSize('hidden');
-        else setPreviewSize('small');
+    // Handle preview size changes
+    const changePreviewSize = (newSize: PreviewSize) => {
+        setPreviewSize(newSize);
+        if (onToggleCameraPreviewVisible) {
+            onToggleCameraPreviewVisible(newSize !== 'hidden');
+        }
     };
 
-    // Determine container size classes
-    let sizeClasses = 'w-60 h-44'; // normal
-    if (previewSize === 'small') sizeClasses = 'w-40 h-28';
-    if (previewSize === 'micro') sizeClasses = 'w-24 h-18';
+    // Cycle through sizes
+    const cycleSize = () => {
+        if (previewSize === 'normal') changePreviewSize('small');
+        else if (previewSize === 'small') changePreviewSize('micro');
+        else changePreviewSize('normal');
+    };
 
-    if (previewSize === 'hidden') {
-        return (
-            <div className="fixed bottom-3 right-3 z-50 pointer-events-auto">
-                <button
-                    onClick={() => setPreviewSize('small')}
-                    className="bg-slate-950/90 hover:bg-slate-800 text-cyan-300 p-2 rounded-xl border border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.3)] flex items-center gap-1.5 text-xs font-mono font-bold backdrop-blur-md active:scale-95 transition-all"
-                    title="Mostrar Câmera"
-                >
-                    <Eye className="w-4 h-4 text-cyan-400" />
-                    <span>Mostrar Câmera</span>
-                </button>
-            </div>
-        );
-    }
-
-    const hasUltraWideCandidate = videoDevices.some(d => {
-        const l = d.label.toLowerCase();
-        return l.includes('wide') || l.includes('ampla') || l.includes('0.5') || l.includes('ultra');
-    });
+    // Determine container size classes for video box
+    let sizeClasses = 'w-64 h-48'; // normal
+    if (previewSize === 'small') sizeClasses = 'w-44 h-32';
+    if (previewSize === 'micro') sizeClasses = 'w-28 h-20';
 
     return (
-        <div className={`fixed bottom-3 right-3 ${sizeClasses} bg-black/80 border-2 border-cyan-500/40 rounded-xl overflow-hidden backdrop-blur-md z-50 shadow-[0_0_20px_rgba(0,0,0,0.6)] transition-all duration-300 flex flex-col`}>
-            {/* Control Bar Header */}
-            <div className="bg-slate-950/90 px-1.5 py-1 text-[9px] text-slate-200 font-mono flex items-center justify-between border-b border-cyan-500/30 z-10 gap-1 shrink-0">
-                <div className="flex items-center gap-1 truncate">
-                    <Camera className="w-3 h-3 text-cyan-400 shrink-0" />
-                    <span className="font-bold truncate text-[9px]">
-                        {facingMode === 'user' ? 'Frontal' : 'Traseira'}
-                    </span>
+        <div className="fixed bottom-3 right-3 z-50 pointer-events-auto flex flex-col items-end gap-1.5 max-w-[320px]">
+            {/* 1. Camera Video Feed Pop-Up (Separated / Uncoupled) */}
+            {previewSize !== 'hidden' && (
+                <div className={`relative ${sizeClasses} bg-black/90 border-2 border-cyan-500/50 rounded-xl overflow-hidden backdrop-blur-md shadow-[0_0_20px_rgba(0,0,0,0.8)] transition-all duration-300 flex flex-col shrink-0`}>
+                    {/* Badge Overlay on top corner of video */}
+                    <div className="absolute top-1.5 left-1.5 px-2 py-0.5 bg-slate-950/80 rounded-md text-[9px] font-mono text-cyan-300 border border-cyan-500/40 backdrop-blur-sm pointer-events-none flex items-center gap-1.5 z-10">
+                        <Camera className="w-3 h-3 text-cyan-400" />
+                        <span className="font-bold">{facingMode === 'user' ? 'Frontal' : 'Traseira'}</span>
+                    </div>
+
+                    {/* Canvas Feed */}
+                    <div className="relative flex-1 w-full h-full overflow-hidden">
+                        <canvas ref={canvasRef} className="w-full h-full object-cover" />
+                    </div>
                 </div>
+            )}
 
-                {/* Header buttons */}
-                <div className="flex items-center gap-1 pointer-events-auto shrink-0">
-                    {/* Mirror / Flip Hand Button */}
-                    {onToggleMirror && (
-                        <button
-                            onClick={onToggleMirror}
-                            className={`p-0.5 rounded text-[9px] border transition-all ${
-                                isCameraMirrored
-                                    ? 'bg-cyan-950 text-cyan-300 border-cyan-500/50'
-                                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                            }`}
-                            title="Inverter / Espelhar Mão Horizontalmente"
-                        >
-                            <FlipHorizontal className="w-3 h-3" />
-                        </button>
+            {/* 2. Uncoupled External Control Bar (Always accessible below camera or floating) */}
+            <div className="bg-slate-950/95 border border-cyan-500/40 backdrop-blur-xl rounded-xl p-1.5 flex items-center gap-1.5 shadow-2xl text-xs font-mono text-white transition-all">
+                {/* Show / Hide Toggle Button */}
+                <button
+                    onClick={() => changePreviewSize(previewSize === 'hidden' ? 'small' : 'hidden')}
+                    className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 rounded-lg border border-cyan-500/40 active:scale-95 transition-all flex items-center gap-1.5 text-[11px] font-bold"
+                    title={previewSize === 'hidden' ? 'Exibir Pop-up da Câmera' : 'Ocultar Pop-up da Câmera'}
+                >
+                    {previewSize === 'hidden' ? (
+                        <>
+                            <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>Exibir Câmera</span>
+                        </>
+                    ) : (
+                        <>
+                            <EyeOff className="w-3.5 h-3.5 text-red-400" />
+                            <span>Ocultar</span>
+                        </>
                     )}
+                </button>
 
-                    {/* Ultra wide button */}
-                    {onSelectUltraWide && (
-                        <button
-                            onClick={onSelectUltraWide}
-                            className="px-1 py-0.5 bg-purple-900/80 hover:bg-purple-800 text-purple-200 rounded text-[8px] font-bold border border-purple-500/40 flex items-center gap-0.5 active:scale-95 transition-all"
-                            title="Ativar Câmera Ultra-Wide (Ampla 0.5x)"
-                        >
-                            <ZoomIn className="w-2.5 h-2.5 text-purple-300" />
-                            <span>0.5x</span>
-                        </button>
-                    )}
-
-                    {/* Switch Camera */}
-                    {onSwitchCamera && (
-                        <button
-                            onClick={onSwitchCamera}
-                            className="p-0.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-[9px] border border-cyan-500/30 active:scale-95"
-                            title="Alternar Câmera"
-                        >
-                            <SwitchCamera className="w-3 h-3" />
-                        </button>
-                    )}
-
-                    {/* Resize / Minimize */}
+                {/* Size Selector Button (Only when visible) */}
+                {previewSize !== 'hidden' && (
                     <button
                         onClick={cycleSize}
-                        className="p-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[9px] active:scale-95"
-                        title="Tamanho da Câmera (Normal / Pequeno / Mínimo / Ocultar)"
+                        className="px-2 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 rounded-lg border border-slate-700 active:scale-95 transition-all flex items-center gap-1 text-[11px] font-bold"
+                        title="Mudar tamanho do pop-up da câmera"
                     >
-                        {previewSize === 'normal' ? (
-                            <Minimize2 className="w-3 h-3 text-amber-400" />
-                        ) : previewSize === 'small' ? (
-                            <Minimize2 className="w-2.5 h-2.5 text-slate-300" />
-                        ) : (
-                            <EyeOff className="w-2.5 h-2.5 text-red-400" />
-                        )}
+                        <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
+                        <span>
+                            {previewSize === 'normal' ? 'Grande' : previewSize === 'small' ? 'Médio' : 'Micro'}
+                        </span>
                     </button>
-                </div>
-            </div>
+                )}
 
-            {/* Video Canvas Container */}
-            <div className="relative flex-1 w-full h-full overflow-hidden bg-black/90">
-                <canvas ref={canvasRef} className="w-full h-full object-cover" />
+                {/* Switch Camera */}
+                {onSwitchCamera && (
+                    <button
+                        onClick={onSwitchCamera}
+                        className="p-1.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 rounded-lg border border-cyan-500/30 active:scale-95 transition-all flex items-center justify-center"
+                        title="Alternar Câmera (Frontal / Traseira)"
+                    >
+                        <SwitchCamera className="w-3.5 h-3.5" />
+                    </button>
+                )}
+
+                {/* Ultra wide button */}
+                {onSelectUltraWide && (
+                    <button
+                        onClick={onSelectUltraWide}
+                        className="px-2 py-1.5 bg-purple-950 hover:bg-purple-900 text-purple-200 rounded-lg border border-purple-500/50 active:scale-95 transition-all flex items-center gap-1 text-[11px] font-bold"
+                        title="Ativar Câmera Ultra-Wide (Ampla 0.5x)"
+                    >
+                        <ZoomIn className="w-3.5 h-3.5 text-purple-300" />
+                        <span>0.5x</span>
+                    </button>
+                )}
+
+                {/* Mirror / Flip Hand Button */}
+                {onToggleMirror && (
+                    <button
+                        onClick={onToggleMirror}
+                        className={`p-1.5 rounded-lg border text-[11px] font-bold active:scale-95 transition-all flex items-center justify-center ${
+                            isCameraMirrored
+                                ? 'bg-cyan-950 text-cyan-300 border-cyan-500/60'
+                                : 'bg-slate-900 text-slate-400 border-slate-700'
+                        }`}
+                        title="Inverter / Espelhar Mão Horizontalmente"
+                    >
+                        <FlipHorizontal className="w-3.5 h-3.5" />
+                    </button>
+                )}
             </div>
         </div>
     );

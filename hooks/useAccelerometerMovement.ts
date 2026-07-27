@@ -175,6 +175,8 @@ export const useAccelerometerMovement = ({
 
   return {
     stepCount,
+    setStepCount,
+    resetStepCount: () => setStepCount(0),
     lastStepTime,
     isMotionSupported,
     hasMotionPermission,

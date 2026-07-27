@@ -6,9 +6,9 @@
 
 import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PerspectiveCamera } from '@react-three/drei';
+import { PerspectiveCamera, Html } from '@react-three/drei';
 import * as THREE from 'three';
-import { GameStatus, PlayerWorldPos, ZombieData, HouseData, RemotePlayer, HandPositions } from '../types';
+import { GameStatus, PlayerWorldPos, ZombieData, HouseData, RemotePlayer, HandPositions, DamageTextData } from '../types';
 import { Environment3D } from './Environment3D';
 import { House3D } from './House3D';
 import { Zombie3D } from './Zombie3D';
@@ -26,9 +26,45 @@ interface GameSceneProps {
   houses: HouseData[];
   remotePlayers: RemotePlayer[];
   isPlayerInSafeZone: boolean;
-  onZombieHit: (zombieId: string, damage: number, handType: 'left' | 'right') => void;
+  onZombieHit: (zombieId: string, baseDamage: number, handType: 'left' | 'right', zombiePos: { x: number; y: number; z: number }) => void;
   onPlayerDamaged: (damage: number) => void;
+  damageTexts?: DamageTextData[];
 }
+
+const FloatingDamageText: React.FC<{ dt: DamageTextData }> = ({ dt }) => {
+  const [age, setAge] = React.useState(0);
+
+  useFrame((_, delta) => {
+    setAge((a) => a + delta);
+  });
+
+  if (age > 1.2) return null;
+  const floatY = dt.y + 1.5 + age * 1.4;
+  const opacity = Math.max(0, 1 - age / 1.2);
+  const scale = 1 + age * 0.2;
+
+  return (
+    <group position={[dt.x, floatY, dt.z]}>
+      <Html center sprite distanceFactor={14}>
+        <div
+          className="pointer-events-none select-none font-black font-mono text-center flex items-center gap-1 px-2.5 py-1 rounded-lg shadow-2xl border backdrop-blur-md"
+          style={{
+            opacity,
+            transform: `scale(${scale})`,
+            backgroundColor: dt.isKill ? 'rgba(185, 28, 28, 0.92)' : 'rgba(2, 6, 23, 0.88)',
+            color: dt.isKill ? '#ffffff' : dt.handType === 'right' ? '#facc15' : '#38bdf8',
+            borderColor: dt.isKill ? '#ef4444' : dt.handType === 'right' ? '#f59e0b' : '#0284c7',
+            textShadow: '0 2px 8px rgba(0,0,0,0.9), 0 0 10px currentColor',
+            fontSize: dt.isKill ? '16px' : '14px',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {dt.isKill ? `💀 ABATIDO -${dt.damage}` : `-${dt.damage}`}
+        </div>
+      </Html>
+    </group>
+  );
+};
 
 export const GameScene: React.FC<GameSceneProps> = ({
   gameStatus,
@@ -41,7 +77,8 @@ export const GameScene: React.FC<GameSceneProps> = ({
   remotePlayers,
   isPlayerInSafeZone,
   onZombieHit,
-  onPlayerDamaged
+  onPlayerDamaged,
+  damageTexts = []
 }) => {
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
   const stereoCamera = useMemo(() => new THREE.StereoCamera(), []);
@@ -162,7 +199,7 @@ export const GameScene: React.FC<GameSceneProps> = ({
             shakeIntensity.current = 0.3;
             soundEngine.playBatSwing();
             soundEngine.playZombieHit();
-            onZombieHit(zombie.id, 45, 'right'); // Baton deals heavy 45 damage
+            onZombieHit(zombie.id, 45, 'right', { x: zombie.x, y: zombie.y, z: zombie.z }); // Baton base 45 damage
           }
         }
       }
@@ -178,7 +215,7 @@ export const GameScene: React.FC<GameSceneProps> = ({
             shakeIntensity.current = 0.2;
             soundEngine.playFistPunch();
             soundEngine.playZombieHit();
-            onZombieHit(zombie.id, 25, 'left'); // Fist deals 25 damage
+            onZombieHit(zombie.id, 25, 'left', { x: zombie.x, y: zombie.y, z: zombie.z }); // Fist base 25 damage
           }
         }
       }
@@ -249,6 +286,11 @@ export const GameScene: React.FC<GameSceneProps> = ({
       {/* Player Weapons / Hands */}
       <Hands3D type="left" positionRef={leftHandPosRef} velocityRef={leftHandVelRef} />
       <Hands3D type="right" positionRef={rightHandPosRef} velocityRef={rightHandVelRef} />
+
+      {/* Floating Damage Text Indicators */}
+      {damageTexts.map((dt) => (
+        <FloatingDamageText key={dt.id} dt={dt} />
+      ))}
     </>
   );
 };

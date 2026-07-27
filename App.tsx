@@ -54,7 +54,9 @@ import {
   Trophy,
   Award,
   TrendingUp,
-  Star
+  Star,
+  Pause,
+  Monitor
 } from 'lucide-react';
 
 // Default Safe House Shelters around origin
@@ -96,12 +98,44 @@ const DEFAULT_HOUSES: HouseData[] = [
 
 export const MAX_PLAYER_HEALTH = 300;
 
+export type ControlMode = 'mobile' | 'pc' | 'xbox';
+
 export const App: React.FC = () => {
   const [gameStatus, setGameStatus] = useState<GameStatus>(GameStatus.LOADING);
   const [health, setHealth] = useState(MAX_PLAYER_HEALTH);
   const [kills, setKills] = useState(0);
   const [wave, setWave] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
+
+  // Platform Control Mode State ('mobile', 'pc', or 'xbox')
+  const [controlMode, setControlMode] = useState<ControlMode>('mobile');
+  const [isPaused, setIsPaused] = useState<boolean>(false);
+
+  // Xbox specific sub-options (Attack method & Gyroscope/AR)
+  const [xboxAttackMode, setXboxAttackMode] = useState<'gamepad' | 'camera'>('gamepad');
+  const [xboxGyroEnabled, setXboxGyroEnabled] = useState<boolean>(true);
+
+  // Keyboard state for WASD input
+  const keysHeldRef = useRef<{ [key: string]: boolean }>({});
+
+  // Virtual attack animation timing refs
+  const leftAttackTimeRef = useRef<number>(0);
+  const rightAttackTimeRef = useRef<number>(0);
+
+  // Gamepad button press debounce refs
+  const lastGpLeftRef = useRef<number>(0);
+  const lastGpRightRef = useRef<number>(0);
+  const lastGpStartRef = useRef<number>(0);
+
+  const triggerLeftAttack = useCallback(() => {
+    leftAttackTimeRef.current = performance.now();
+    soundEngine.playFistPunch();
+  }, []);
+
+  const triggerRightAttack = useCallback(() => {
+    rightAttackTimeRef.current = performance.now();
+    soundEngine.playBatSwing();
+  }, []);
 
   // GPS State
   const [originGps, setOriginGps] = useState<{ lat: number; lng: number } | null>(null);
@@ -190,6 +224,7 @@ export const App: React.FC = () => {
   // Exit Room / Return to Menu
   const exitRoom = () => {
     setGameStatus(GameStatus.IDLE);
+    setIsPaused(false);
     setHealth(MAX_PLAYER_HEALTH);
     setKills(0);
     setWave(1);
@@ -202,6 +237,7 @@ export const App: React.FC = () => {
     playerPosRef.current = { x: 0, y: 0, z: 0 };
     targetPlayerPosRef.current = { x: 0, y: 0, z: 0 };
     setPlayerPos({ x: 0, y: 0, z: 0 });
+    keysHeldRef.current = {};
   };
 
   // Fullscreen & Gyroscope Hooks
@@ -212,16 +248,28 @@ export const App: React.FC = () => {
     setIsGyroEnabled,
     hasPermission: hasGyroPermission,
     cameraQuaternionRef,
+    rotateCamera,
     requestGyroPermission,
     calibrateGyro
   } = useGyroscope();
+
+  // Sync Gyroscope activation with platform control mode
+  useEffect(() => {
+    if (controlMode === 'pc') {
+      setIsGyroEnabled(false);
+    } else if (controlMode === 'xbox') {
+      setIsGyroEnabled(xboxGyroEnabled);
+    } else if (controlMode === 'mobile') {
+      setIsGyroEnabled(true);
+    }
+  }, [controlMode, xboxGyroEnabled, setIsGyroEnabled]);
 
   // Movement Mode State ('accelerometer' or 'gps')
   const [movementMode, setMovementMode] = useState<'accelerometer' | 'gps'>('accelerometer');
 
   // Accelerometer step movement handler (moves target position; lerped smoothly below)
   const handleAccelerometerStep = useCallback(({ dx, dz }: { dx: number; dz: number }) => {
-    if (useJoystick) return; // Joystick takes over movement when enabled
+    if (useJoystick || controlMode !== 'mobile') return;
     const proposedX = targetPlayerPosRef.current.x + dx;
     const proposedZ = targetPlayerPosRef.current.z + dz;
     const safeTarget = resolvePlayerCollision(
@@ -234,7 +282,7 @@ export const App: React.FC = () => {
     targetPlayerPosRef.current.x = safeTarget.x;
     targetPlayerPosRef.current.z = safeTarget.z;
     soundEngine.playFootstep();
-  }, [useJoystick]);
+  }, [useJoystick, controlMode]);
 
   const {
     stepCount,
@@ -247,17 +295,98 @@ export const App: React.FC = () => {
     isAutoWalking,
     setIsAutoWalking
   } = useAccelerometerMovement({
-    enabled: movementMode === 'accelerometer' && !useJoystick,
+    enabled: movementMode === 'accelerometer' && !useJoystick && controlMode === 'mobile',
     gameStatus,
     cameraQuaternionRef,
     onStep: handleAccelerometerStep
   });
 
   // -------------------------------------------------------------
-  // Smooth Player Movement Animation Loop (Lerping playerPosRef -> targetPlayerPosRef & Joystick)
+  // Keyboard, Mouse, Gamepad & Pause Input Listeners
   // -------------------------------------------------------------
   useEffect(() => {
-    if (gameStatus !== GameStatus.PLAYING) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // ESC Key toggles pause menu
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        if (gameStatus === GameStatus.PLAYING) {
+          e.preventDefault();
+          setIsPaused((prev) => {
+            const next = !prev;
+            if (next && document.pointerLockElement) {
+              document.exitPointerLock();
+            }
+            return next;
+          });
+        }
+        return;
+      }
+
+      if (gameStatus !== GameStatus.PLAYING || isPaused) return;
+      keysHeldRef.current[e.key.toLowerCase()] = true;
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      keysHeldRef.current[e.key.toLowerCase()] = false;
+    };
+
+    const handleBlur = () => {
+      keysHeldRef.current = {};
+    };
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (gameStatus !== GameStatus.PLAYING || isPaused) return;
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'BUTTON' || target.tagName === 'INPUT' || target.closest('button') || target.closest('input'))) {
+        return;
+      }
+
+      if (controlMode === 'pc') {
+        if (e.button === 0) {
+          triggerLeftAttack();
+        } else if (e.button === 2) {
+          e.preventDefault();
+          triggerRightAttack();
+        }
+      }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (gameStatus !== GameStatus.PLAYING || isPaused) return;
+      if (controlMode === 'pc' && document.pointerLockElement) {
+        const movementX = e.movementX || 0;
+        const movementY = e.movementY || 0;
+        rotateCamera(-movementX * 0.0022, -movementY * 0.0022);
+      }
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      if (gameStatus === GameStatus.PLAYING && controlMode === 'pc') {
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('contextmenu', handleContextMenu);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('contextmenu', handleContextMenu);
+    };
+  }, [gameStatus, isPaused, controlMode, rotateCamera, triggerLeftAttack, triggerRightAttack]);
+
+  // -------------------------------------------------------------
+  // Smooth Movement Animation Loop (WASD, Gamepad, Joystick, Lerping & Collision)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    if (gameStatus !== GameStatus.PLAYING || isPaused) return;
 
     let animId: number;
     let lastTime = performance.now();
@@ -266,14 +395,198 @@ export const App: React.FC = () => {
       const dt = Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
 
-      // Handle Virtual Joystick Locomotion (if active & thumbstick displaced)
-      if (useJoystick && (joystickVectorRef.current.x !== 0 || joystickVectorRef.current.y !== 0)) {
-        const jx = joystickVectorRef.current.x; // > 0 right, < 0 left
-        const jy = joystickVectorRef.current.y; // < 0 up (forward), > 0 down (backward)
+      // 1. Calculate Virtual Attack Thrust Animation
+      let leftZ = 0;
+      let leftVelZ = 0;
+      if (leftAttackTimeRef.current > 0) {
+        const elapsed = now - leftAttackTimeRef.current;
+        if (elapsed < 200) {
+          const prog = elapsed / 200;
+          leftZ = -Math.sin(prog * Math.PI) * 0.85;
+          leftVelZ = -3.5 * (1 - prog);
+        } else {
+          leftAttackTimeRef.current = 0;
+        }
+      }
 
-        const JOYSTICK_SPEED = 2.2; // Smooth, natural walking speed (2.2 m/s)
+      let rightZ = 0;
+      let rightVelZ = 0;
+      if (rightAttackTimeRef.current > 0) {
+        const elapsed = now - rightAttackTimeRef.current;
+        if (elapsed < 250) {
+          const prog = elapsed / 250;
+          rightZ = -Math.sin(prog * Math.PI) * 0.95;
+          rightVelZ = -4.0 * (1 - prog);
+        } else {
+          rightAttackTimeRef.current = 0;
+        }
+      }
 
-        // Determine orientation from camera orientation or default world
+      // Check MediaPipe tracked hands
+      const mpHands = lastResultsRef.current;
+      const hasMpLeft = mpHands && mpHands.leftHandLandmarks && mpHands.leftHandLandmarks.length > 0;
+      const hasMpRight = mpHands && mpHands.rightHandLandmarks && mpHands.rightHandLandmarks.length > 0;
+
+      const shouldUseCameraHands = (controlMode === 'mobile') || (controlMode === 'xbox' && xboxAttackMode === 'camera');
+
+      handPositionsRef.current = {
+        left: (!hasMpLeft || !shouldUseCameraHands)
+          ? new THREE.Vector3(-0.22, -0.18, leftZ)
+          : handPositionsRef.current?.left,
+        right: (!hasMpRight || !shouldUseCameraHands)
+          ? new THREE.Vector3(0.22, -0.18, rightZ)
+          : handPositionsRef.current?.right,
+        leftVelocity: (!hasMpLeft || !shouldUseCameraHands)
+          ? new THREE.Vector3(0, 0, leftVelZ)
+          : handPositionsRef.current?.leftVelocity,
+        rightVelocity: (!hasMpRight || !shouldUseCameraHands)
+          ? new THREE.Vector3(0, 0, rightVelZ)
+          : handPositionsRef.current?.rightVelocity
+      };
+
+      // 2. PC Mode WASD Locomotion (Camera View Synchronized)
+      if (controlMode === 'pc') {
+        const keys = keysHeldRef.current;
+        let fInput = 0;
+        let sInput = 0;
+        if (keys.w || keys.arrowup) fInput += 1;
+        if (keys.s || keys.arrowdown) fInput -= 1;
+        if (keys.d || keys.arrowright) sInput += 1;
+        if (keys.a || keys.arrowleft) sInput -= 1;
+
+        if (fInput !== 0 || sInput !== 0) {
+          const len = Math.hypot(fInput, sInput);
+          const normF = fInput / len;
+          const normS = sInput / len;
+
+          const PC_SPEED = 2.8;
+
+          let fX = 0, fZ = -1;
+          let rX = 1, rZ = 0;
+
+          if (cameraQuaternionRef.current) {
+            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternionRef.current);
+            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cameraQuaternionRef.current);
+
+            const fLen = Math.hypot(forward.x, forward.z);
+            const rLen = Math.hypot(right.x, right.z);
+
+            if (fLen > 0.001) { fX = forward.x / fLen; fZ = forward.z / fLen; }
+            if (rLen > 0.001) { rX = right.x / rLen; rZ = right.z / rLen; }
+          }
+
+          const moveDX = (rX * normS + fX * normF) * PC_SPEED * dt;
+          const moveDZ = (rZ * normS + fZ * normF) * PC_SPEED * dt;
+
+          const proposedX = targetPlayerPosRef.current.x + moveDX;
+          const proposedZ = targetPlayerPosRef.current.z + moveDZ;
+
+          const safeTarget = resolvePlayerCollision(
+            targetPlayerPosRef.current.x,
+            targetPlayerPosRef.current.z,
+            proposedX,
+            proposedZ,
+            0.5
+          );
+
+          targetPlayerPosRef.current.x = safeTarget.x;
+          targetPlayerPosRef.current.z = safeTarget.z;
+
+          if (Math.random() < 0.1) {
+            soundEngine.playFootstep();
+          }
+        }
+      }
+
+      // 3. Xbox Controller / Gamepad Support
+      const gamepads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
+      const gp = gamepads[0] || gamepads[1] || gamepads[2] || gamepads[3];
+
+      if (gp && gp.connected) {
+        const DEADZONE = 0.18;
+
+        // Left Stick Movement
+        let lx = gp.axes[0] || 0;
+        let ly = gp.axes[1] || 0;
+        if (Math.abs(lx) < DEADZONE) lx = 0;
+        if (Math.abs(ly) < DEADZONE) ly = 0;
+
+        if ((controlMode === 'xbox' || lx !== 0 || ly !== 0) && (lx !== 0 || ly !== 0)) {
+          const GP_SPEED = 2.8;
+          const normF = -ly; // Up is negative Y
+          const normS = lx;
+
+          let fX = 0, fZ = -1;
+          let rX = 1, rZ = 0;
+
+          if (cameraQuaternionRef.current) {
+            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternionRef.current);
+            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cameraQuaternionRef.current);
+
+            const fLen = Math.hypot(forward.x, forward.z);
+            const rLen = Math.hypot(right.x, right.z);
+
+            if (fLen > 0.001) { fX = forward.x / fLen; fZ = forward.z / fLen; }
+            if (rLen > 0.001) { rX = right.x / rLen; rZ = right.z / rLen; }
+          }
+
+          const moveDX = (rX * normS + fX * normF) * GP_SPEED * dt;
+          const moveDZ = (rZ * normS + fZ * normF) * GP_SPEED * dt;
+
+          const proposedX = targetPlayerPosRef.current.x + moveDX;
+          const proposedZ = targetPlayerPosRef.current.z + moveDZ;
+
+          const safeTarget = resolvePlayerCollision(
+            targetPlayerPosRef.current.x,
+            targetPlayerPosRef.current.z,
+            proposedX,
+            proposedZ,
+            0.5
+          );
+
+          targetPlayerPosRef.current.x = safeTarget.x;
+          targetPlayerPosRef.current.z = safeTarget.z;
+
+          if (Math.random() < 0.1) {
+            soundEngine.playFootstep();
+          }
+        }
+
+        // Right Stick Camera Look
+        let rx = gp.axes[2] !== undefined && Math.abs(gp.axes[2]) > 0.01 ? gp.axes[2] : (gp.axes[5] || 0);
+        let ry = gp.axes[3] || 0;
+        if (Math.abs(rx) < DEADZONE) rx = 0;
+        if (Math.abs(ry) < DEADZONE) ry = 0;
+
+        if (rx !== 0 || ry !== 0) {
+          rotateCamera(-rx * 2.2 * dt, -ry * 1.8 * dt);
+        }
+
+        // Xbox Buttons
+        const leftPressed = gp.buttons[4]?.pressed || gp.buttons[6]?.pressed || gp.buttons[2]?.pressed;
+        const rightPressed = gp.buttons[5]?.pressed || gp.buttons[7]?.pressed || gp.buttons[1]?.pressed || gp.buttons[0]?.pressed;
+        const startPressed = gp.buttons[9]?.pressed;
+
+        if (leftPressed && now - lastGpLeftRef.current > 250) {
+          lastGpLeftRef.current = now;
+          triggerLeftAttack();
+        }
+        if (rightPressed && now - lastGpRightRef.current > 250) {
+          lastGpRightRef.current = now;
+          triggerRightAttack();
+        }
+        if (startPressed && now - lastGpStartRef.current > 400) {
+          lastGpStartRef.current = now;
+          setIsPaused((prev) => !prev);
+        }
+      }
+
+      // 4. Virtual Joystick Locomotion (if active & in mobile mode)
+      if (controlMode === 'mobile' && useJoystick && (joystickVectorRef.current.x !== 0 || joystickVectorRef.current.y !== 0)) {
+        const jx = joystickVectorRef.current.x;
+        const jy = joystickVectorRef.current.y;
+        const JOYSTICK_SPEED = 2.2;
+
         let fX = 0, fZ = -1;
         let rX = 1, rZ = 0;
 
@@ -284,17 +597,10 @@ export const App: React.FC = () => {
           const fLen = Math.hypot(forward.x, forward.z);
           const rLen = Math.hypot(right.x, right.z);
 
-          if (fLen > 0.001) {
-            fX = forward.x / fLen;
-            fZ = forward.z / fLen;
-          }
-          if (rLen > 0.001) {
-            rX = right.x / rLen;
-            rZ = right.z / rLen;
-          }
+          if (fLen > 0.001) { fX = forward.x / fLen; fZ = forward.z / fLen; }
+          if (rLen > 0.001) { rX = right.x / rLen; rZ = right.z / rLen; }
         }
 
-        // Pushing UP (jy < 0) moves FORWARD into camera view direction
         const forwardFactor = -jy;
         const sideFactor = jx;
 
@@ -316,7 +622,7 @@ export const App: React.FC = () => {
         targetPlayerPosRef.current.z = safeTarget.z;
       }
 
-      // Smoothly lerp playerPosRef towards targetPlayerPosRef with collision safety
+      // Smoothly lerp playerPosRef towards targetPlayerPosRef
       const curr = playerPosRef.current;
       const target = targetPlayerPosRef.current;
 
@@ -347,7 +653,7 @@ export const App: React.FC = () => {
 
     animId = requestAnimationFrame(updateMovementLoop);
     return () => cancelAnimationFrame(animId);
-  }, [gameStatus, useJoystick, cameraQuaternionRef]);
+  }, [gameStatus, isPaused, useJoystick, controlMode, cameraQuaternionRef, rotateCamera, triggerLeftAttack, triggerRightAttack]);
 
   // -------------------------------------------------------------
   // 1. GPS Tracking System
@@ -1131,6 +1437,60 @@ export const App: React.FC = () => {
       )}
 
       {/* ------------------------------------------------------------- */}
+      {/* PAUSE OVERLAY MODAL (ESC Key / Gamepad Start Button) */}
+      {/* ------------------------------------------------------------- */}
+      {gameStatus === GameStatus.PLAYING && isPaused && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 pointer-events-auto">
+          <div className="bg-slate-900 border-2 border-amber-500/60 rounded-3xl p-6 sm:p-8 max-w-sm w-full text-center shadow-[0_0_40px_rgba(245,158,11,0.35)] space-y-6 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex flex-col items-center gap-2">
+              <div className="bg-amber-500/20 p-3.5 rounded-full border border-amber-500/50">
+                <Pause className="w-8 h-8 text-amber-400 animate-pulse" />
+              </div>
+              <h2 className="text-2xl font-black text-amber-400 tracking-wider uppercase">JOGO PAUSADO</h2>
+              <p className="text-xs text-slate-300 font-mono">
+                Ponteiro do mouse liberado. Escolha uma opção para prosseguir.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 font-bold text-sm">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPaused(false);
+                  if (controlMode === 'pc') {
+                    const canvasEl = document.querySelector('canvas');
+                    if (canvasEl) {
+                      try { canvasEl.requestPointerLock(); } catch (_) {}
+                    }
+                  }
+                }}
+                className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-black rounded-xl font-black shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer"
+              >
+                <Play className="w-5 h-5 fill-black" />
+                <span>RETOMAR JOGO</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPaused(false);
+                  exitRoom();
+                }}
+                className="w-full py-3 px-4 bg-slate-800 hover:bg-red-950/90 hover:border-red-500/80 border border-slate-700 text-slate-200 hover:text-red-300 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer"
+              >
+                <LogOut className="w-5 h-5" />
+                <span>IR PARA TELA INICIAL (SAIR)</span>
+              </button>
+            </div>
+
+            <div className="text-[10px] text-slate-400 font-mono border-t border-slate-800 pt-3">
+              Dica: Tecla <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-slate-200">ESC</kbd> pausa ou retoma o jogo.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------- */}
       {/* MENUS (START, LOADING, GAME OVER) */}
       {/* ------------------------------------------------------------- */}
       {gameStatus !== GameStatus.PLAYING && (
@@ -1176,6 +1536,166 @@ export const App: React.FC = () => {
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span><strong>Casas de Segurança:</strong> Entre nas áreas verdes indicadas no radar para curar e recuperar vida.</span>
               </div>
+            </div>
+
+            {/* Platform & Control Mode Selector Card */}
+            <div className="bg-slate-900/90 p-3.5 sm:p-4 rounded-xl border border-slate-800 mb-4 space-y-2.5 text-left">
+              <div className="flex items-center gap-2 text-xs font-bold text-amber-400">
+                <Gamepad2 className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>MODO DE JOGO & PLATAFORMA:</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {/* Mobile */}
+                <button
+                  type="button"
+                  onClick={() => setControlMode('mobile')}
+                  className={`p-2.5 rounded-xl border text-left flex flex-col justify-between gap-1 transition-all active:scale-95 ${
+                    controlMode === 'mobile'
+                      ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.25)] font-bold'
+                      : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-black text-xs">
+                    <Smartphone className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Celular (Sensores)</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    Giroscópio, Acelerômetro, GPS e Joystick.
+                  </p>
+                </button>
+
+                {/* PC WASD */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setControlMode('pc');
+                    setUseJoystick(false);
+                  }}
+                  className={`p-2.5 rounded-xl border text-left flex flex-col justify-between gap-1 transition-all active:scale-95 ${
+                    controlMode === 'pc'
+                      ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.25)] font-bold'
+                      : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-black text-xs">
+                    <Monitor className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <span>Computador (PC)</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    WASD sincronizado + Mouse Look. Clicks atacam. ESC pausa.
+                  </p>
+                </button>
+
+                {/* Xbox Gamepad */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setControlMode('xbox');
+                    setUseJoystick(false);
+                  }}
+                  className={`p-2.5 rounded-xl border text-left flex flex-col justify-between gap-1 transition-all active:scale-95 ${
+                    controlMode === 'xbox'
+                      ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.25)] font-bold'
+                      : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-black text-xs">
+                    <Gamepad2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>Controle Xbox One</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    Analógicos direcionais + Gatilhos/Bumper. Start pausa.
+                  </p>
+                </button>
+              </div>
+
+              {controlMode === 'pc' && (
+                <div className="bg-cyan-950/60 border border-cyan-500/40 p-2 rounded-lg text-[11px] font-mono text-cyan-200 flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span>Modo Computador Ativo: GPS, Acelerômetro, Giroscópio e Joystick desativados. Navegação WASD direciona em relação à visão.</span>
+                </div>
+              )}
+
+              {controlMode === 'xbox' && (
+                <div className="bg-emerald-950/60 border border-emerald-500/40 p-3 rounded-xl space-y-3 text-[11px] text-emerald-200">
+                  <div className="flex items-center gap-1.5 font-bold text-emerald-300">
+                    <Info className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>CONFIGURAÇÃO DO CONTROLE XBOX ONE:</span>
+                  </div>
+
+                  {/* Toggle 1: Modo de Ataque (Botões vs Câmera) */}
+                  <div className="space-y-1">
+                    <div className="font-bold text-[10px] text-emerald-400 uppercase tracking-wider">1. Método de Ataque:</div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setXboxAttackMode('gamepad')}
+                        className={`p-2 rounded-lg border text-left flex items-center gap-1.5 font-bold transition-all active:scale-95 ${
+                          xboxAttackMode === 'gamepad'
+                            ? 'bg-emerald-500/30 border-emerald-400 text-emerald-100 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+                            : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Gamepad2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>Botões do Controle</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setXboxAttackMode('camera')}
+                        className={`p-2 rounded-lg border text-left flex items-center gap-1.5 font-bold transition-all active:scale-95 ${
+                          xboxAttackMode === 'camera'
+                            ? 'bg-emerald-500/30 border-emerald-400 text-emerald-100 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+                            : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Camera className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>Câmera (Gestos IA)</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Toggle 2: Giroscópio / AR vs Somente Controle */}
+                  <div className="space-y-1">
+                    <div className="font-bold text-[10px] text-emerald-400 uppercase tracking-wider">2. Visão de Câmera & Giroscópio:</div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setXboxGyroEnabled(false)}
+                        className={`p-2 rounded-lg border text-left flex items-center gap-1.5 font-bold transition-all active:scale-95 ${
+                          !xboxGyroEnabled
+                            ? 'bg-emerald-500/30 border-emerald-400 text-emerald-100 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+                            : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Monitor className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>Somente Controle</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setXboxGyroEnabled(true)}
+                        className={`p-2 rounded-lg border text-left flex items-center gap-1.5 font-bold transition-all active:scale-95 ${
+                          xboxGyroEnabled
+                            ? 'bg-emerald-500/30 border-emerald-400 text-emerald-100 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+                            : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Smartphone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>Controle + Giroscópio (AR)</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="text-[10px] text-emerald-300/80 font-mono pt-1.5 border-t border-emerald-800/50 leading-relaxed">
+                    {xboxAttackMode === 'camera' && xboxGyroEnabled && '• Modo Realidade Aumentada Completo: Gestos das mãos pela câmera + Giroscópio 360° + Analógicos Xbox.'}
+                    {xboxAttackMode === 'gamepad' && xboxGyroEnabled && '• Modo Híbrido: Movimento e visão pelo controle + Giroscópio de cabeça + Ataque pelos botões/gatilhos (RT/LT).'}
+                    {xboxAttackMode === 'camera' && !xboxGyroEnabled && '• Modo Câmera Sem Giroscópio: Rastreamento de mãos pela câmera + Movimento/Visão puramente pelos analógicos.'}
+                    {xboxAttackMode === 'gamepad' && !xboxGyroEnabled && '• Modo 100% Controle Virtual: Movimento, câmera e ataques exclusivamente via controle Xbox One.'}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Display & Gyro & VR & Camera Settings Panel */}
@@ -1273,19 +1793,25 @@ export const App: React.FC = () => {
                     Movimenta o personagem na tela pelo polegar esquerdo. Desativa Acelerômetro, GPS e VR Cardboard.
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => toggleJoystickMode(!useJoystick)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 shrink-0 ${
-                    useJoystick
-                      ? 'bg-cyan-950 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.4)]'
-                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
-                  }`}
-                  title="Ativar direcional analógico na tela"
-                >
-                  <Gamepad2 className="w-3.5 h-3.5" />
-                  <span>{useJoystick ? 'Ativado (ON)' : 'Desativado'}</span>
-                </button>
+                {controlMode !== 'mobile' ? (
+                  <span className="text-[10px] text-slate-400 font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800 shrink-0">
+                    Indisponível no modo {controlMode === 'pc' ? 'PC' : 'Xbox'}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => toggleJoystickMode(!useJoystick)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border active:scale-95 shrink-0 ${
+                      useJoystick
+                        ? 'bg-cyan-950 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.4)]'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
+                    }`}
+                    title="Ativar direcional analógico na tela"
+                  >
+                    <Gamepad2 className="w-3.5 h-3.5" />
+                    <span>{useJoystick ? 'Ativado (ON)' : 'Desativado'}</span>
+                  </button>
+                )}
               </div>
 
               {/* Google Cardboard VR Option */}

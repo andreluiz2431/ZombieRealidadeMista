@@ -38,6 +38,25 @@ export const useGyroscope = () => {
   const dragPitchRef = useRef<number>(0);
   const dragYawRef = useRef<number>(0);
 
+  // Manual camera rotation helper (for Mouse Look, Keyboard or Gamepad sticks)
+  const rotateCamera = useCallback((deltaYaw: number, deltaPitch: number) => {
+    dragYawRef.current += deltaYaw;
+    dragPitchRef.current += deltaPitch;
+
+    const maxPitch = Math.PI / 2 - 0.05;
+    dragPitchRef.current = Math.max(-maxPitch, Math.min(maxPitch, dragPitchRef.current));
+
+    const dragQuat = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(dragPitchRef.current, dragYawRef.current, 0, 'YXZ')
+    );
+    if (!isGyroEnabled || !hasReceivedData) {
+      cameraQuaternionRef.current.copy(dragQuat);
+    } else {
+      const calibratedDeviceQuat = calibrationQuatRef.current.clone().multiply(rawDeviceQuatRef.current);
+      cameraQuaternionRef.current.copy(dragQuat.multiply(calibratedDeviceQuat));
+    }
+  }, [isGyroEnabled, hasReceivedData]);
+
   // Pointer drag state
   const isDraggingRef = useRef<boolean>(false);
   const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -224,6 +243,9 @@ export const useGyroscope = () => {
     screenOrientation,
     isLandscape: Math.abs(screenOrientation) === 90 || Math.abs(screenOrientation) === 270,
     cameraQuaternionRef,
+    dragPitchRef,
+    dragYawRef,
+    rotateCamera,
     requestGyroPermission,
     calibrateGyro
   };

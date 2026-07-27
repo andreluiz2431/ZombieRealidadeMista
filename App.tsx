@@ -492,8 +492,8 @@ export const App: React.FC = () => {
 
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
-      // Spawn at active wave distance (10 to 16 meters)
-      const dist = 10 + Math.random() * 6;
+      // Spawn at active wave distance (17 to 23 meters)
+      const dist = 17 + Math.random() * 6;
       const x = pPos.x + Math.sin(angle) * dist;
       const z = pPos.z + Math.cos(angle) * dist;
 

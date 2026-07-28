@@ -9,8 +9,9 @@ import * as THREE from 'three';
 
 // Mapping 2D normalized coordinates to 3D game view space.
 const mapHandToWorld = (x: number, y: number, isMirrored: boolean = true): THREE.Vector3 => {
-  // When isMirrored is true: moving hand right physically moves right in 3D screen view
-  const normX = isMirrored ? (x - 0.5) : (0.5 - x); 
+  // When isMirrored is true (front user camera):
+  // Moving hand to physical right causes camera x to decrease -> normX increases (0.5 - x) -> moves right (+X) in 3D view
+  const normX = isMirrored ? (0.5 - x) : (x - 0.5); 
   const normY = (0.5 - y); // +0.5 top of camera frame, -0.5 bottom of camera frame
 
   // Subtle Z depth push when raising or extending hand
@@ -288,25 +289,49 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
       let newLeft: THREE.Vector3 | null = null;
       let newRight: THREE.Vector3 | null = null;
 
-      if (results.landmarks) {
+      if (results.landmarks && results.landmarks.length > 0) {
+        const detectedHands: { worldPos: THREE.Vector3; xScreen: number }[] = [];
+
         for (let i = 0; i < results.landmarks.length; i++) {
           const landmarks = results.landmarks[i];
-          const classification = results.handedness[i][0];
-          const isRight = classification.categoryName === 'Right';
+          // Use Landmark 9 (middle knuckle) for center of hand stability whether fist or open palm
+          const centerLandmark = landmarks[9] || landmarks[8] || landmarks[0];
+          const worldPos = mapHandToWorld(centerLandmark.x, centerLandmark.y, isCameraMirrored);
 
-          const tip = landmarks[8];
-          const worldPos = mapHandToWorld(tip.x, tip.y, isCameraMirrored);
+          // Screen X coordinate (0.0 = screen left, 1.0 = screen right)
+          const screenX = isCameraMirrored ? (1 - centerLandmark.x) : centerLandmark.x;
 
-          if (isRight) {
-            newRight = worldPos;
+          detectedHands.push({ worldPos, xScreen: screenX });
+        }
+
+        const s = handPositionsRef.current;
+
+        if (detectedHands.length === 1) {
+          const single = detectedHands[0];
+          // If only 1 hand is present in camera:
+          // Check if right hand was previously being tracked actively
+          if (s.right && !s.left) {
+            newRight = single.worldPos;
+          } else if (s.left && !s.right) {
+            newLeft = single.worldPos;
           } else {
-            newLeft = worldPos;
+            // Default based on screen side: Right side of screen (>= 0.45) = Right hand (Bat), Left side (< 0.45) = Left hand (Fist)
+            if (single.xScreen >= 0.4) {
+              newRight = single.worldPos;
+            } else {
+              newLeft = single.worldPos;
+            }
           }
+        } else if (detectedHands.length >= 2) {
+          // Sort by screen X position: Leftmost hand = Left hand, Rightmost hand = Right hand
+          detectedHands.sort((a, b) => a.xScreen - b.xScreen);
+          newLeft = detectedHands[0].worldPos;
+          newRight = detectedHands[detectedHands.length - 1].worldPos;
         }
       }
 
       const s = handPositionsRef.current;
-      const LERP = 0.6;
+      const LERP = 0.65;
 
       if (newLeft) {
         if (s.left) {
@@ -319,6 +344,7 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
         s.left = newLeft;
       } else {
         s.left = null;
+        s.leftVelocity.set(0, 0, 0);
       }
 
       if (newRight) {
@@ -332,6 +358,7 @@ export const useMediaPipe = (videoRef: React.RefObject<HTMLVideoElement | null>)
         s.right = newRight;
       } else {
         s.right = null;
+        s.rightVelocity.set(0, 0, 0);
       }
     };
 

@@ -272,10 +272,16 @@ export const App: React.FC = () => {
       setIsGyroEnabled(false);
     } else if (controlMode === 'xbox') {
       setIsGyroEnabled(xboxGyroEnabled);
+      if (xboxGyroEnabled && calibrateGyro) {
+        calibrateGyro();
+      }
     } else if (controlMode === 'mobile') {
       setIsGyroEnabled(true);
+      if (calibrateGyro) {
+        calibrateGyro();
+      }
     }
-  }, [controlMode, xboxGyroEnabled, setIsGyroEnabled]);
+  }, [controlMode, xboxGyroEnabled, setIsGyroEnabled, calibrateGyro]);
 
   // Movement Mode State ('accelerometer' or 'gps')
   const [movementMode, setMovementMode] = useState<'accelerometer' | 'gps'>('accelerometer');
@@ -442,6 +448,9 @@ export const App: React.FC = () => {
       const hasCameraLeft = shouldUseCameraHands && rawHands?.left != null;
       const hasCameraRight = shouldUseCameraHands && rawHands?.right != null;
 
+      const defaultLeftVel = new THREE.Vector3(0, 0, leftVelZ);
+      const defaultRightVel = new THREE.Vector3(0, 0, rightVelZ);
+
       effectiveHandPositionsRef.current = {
         left: hasCameraLeft
           ? rawHands.left
@@ -449,12 +458,12 @@ export const App: React.FC = () => {
         right: hasCameraRight
           ? rawHands.right
           : new THREE.Vector3(0.22, -0.18, rightZ),
-        leftVelocity: hasCameraLeft && rawHands?.leftVelocity
+        leftVelocity: (hasCameraLeft && rawHands?.leftVelocity)
           ? rawHands.leftVelocity
-          : new THREE.Vector3(0, 0, leftVelZ),
-        rightVelocity: hasCameraRight && rawHands?.rightVelocity
+          : defaultLeftVel,
+        rightVelocity: (hasCameraRight && rawHands?.rightVelocity)
           ? rawHands.rightVelocity
-          : new THREE.Vector3(0, 0, rightVelZ)
+          : defaultRightVel
       };
 
       // 2. PC Mode WASD Locomotion (Camera View Synchronized)

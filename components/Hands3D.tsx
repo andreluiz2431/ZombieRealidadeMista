@@ -43,7 +43,7 @@ export const Hands3D: React.FC<Hands3DProps> = ({ type, positionRef, velocityRef
       let swayY = 0;
       let swayZ = 0;
 
-      if (velocity) {
+      if (velocity && typeof velocity.x === 'number' && typeof velocity.y === 'number' && typeof velocity.z === 'number') {
         swayX = velocity.y * 0.04;
         swayZ = -velocity.x * 0.04;
         swayY = velocity.z * 0.03;

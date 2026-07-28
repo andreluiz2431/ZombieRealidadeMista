@@ -85,6 +85,12 @@ export const GameScene: React.FC<GameSceneProps> = ({
   const shakeIntensity = useRef<number>(0);
   const lastAttackTime = useRef<{ left: number; right: number }>({ left: 0, right: 0 });
 
+  // Frame-to-frame position tracking for world movement speed of hands
+  const lastRightWorldPos = useRef<THREE.Vector3 | null>(null);
+  const lastLeftWorldPos = useRef<THREE.Vector3 | null>(null);
+  const worldSpeedRightRef = useRef<number>(0);
+  const worldSpeedLeftRef = useRef<number>(0);
+
   // Helper vectors for collision checks
   const vecHand = useMemo(() => new THREE.Vector3(), []);
   const vecZombie = useMemo(() => new THREE.Vector3(), []);
@@ -180,6 +186,29 @@ export const GameScene: React.FC<GameSceneProps> = ({
       }
     }
 
+    // Calculate real 3D world speed of hands frame-to-frame
+    if (rightHandPosRef.current) {
+      if (lastRightWorldPos.current) {
+        const distMoved = rightHandPosRef.current.distanceTo(lastRightWorldPos.current);
+        worldSpeedRightRef.current = delta > 0.0001 ? distMoved / delta : 0;
+      }
+      lastRightWorldPos.current = rightHandPosRef.current.clone();
+    } else {
+      lastRightWorldPos.current = null;
+      worldSpeedRightRef.current = 0;
+    }
+
+    if (leftHandPosRef.current) {
+      if (lastLeftWorldPos.current) {
+        const distMoved = leftHandPosRef.current.distanceTo(lastLeftWorldPos.current);
+        worldSpeedLeftRef.current = delta > 0.0001 ? distMoved / delta : 0;
+      }
+      lastLeftWorldPos.current = leftHandPosRef.current.clone();
+    } else {
+      lastLeftWorldPos.current = null;
+      worldSpeedLeftRef.current = 0;
+    }
+
     // 3. Combat Collision Detection (Player attacking Zombies)
     const now = performance.now();
 
@@ -191,9 +220,16 @@ export const GameScene: React.FC<GameSceneProps> = ({
       // RIGHT HAND: BATON ATTACK
       if (rightHandPosRef.current) {
         const distRight = rightHandPosRef.current.distanceTo(vecZombie);
-        const speedRight = hands?.rightVelocity ? hands.rightVelocity.length() : 0;
+        const cameraSpeedRight = (hands?.rightVelocity && typeof hands.rightVelocity.length === 'function')
+          ? hands.rightVelocity.length()
+          : 0;
+        const worldSpeedRight = worldSpeedRightRef.current;
 
-        if (distRight < 2.2 && (speedRight > 1.2 || rightHandPosRef.current.z < playerPos.z - 0.5)) {
+        // Requires active motion (swinging hand/baton in camera OR pressing attack button)
+        // Enemies DO NOT take damage by simply touching/resting on the baton
+        const isSwingingRight = cameraSpeedRight > 0.55 || worldSpeedRight > 1.0;
+
+        if (distRight < 2.2 && isSwingingRight) {
           if (now - lastAttackTime.current.right > 280) {
             lastAttackTime.current.right = now;
             shakeIntensity.current = 0.3;
@@ -207,9 +243,16 @@ export const GameScene: React.FC<GameSceneProps> = ({
       // LEFT HAND: FIST PUNCH ATTACK
       if (leftHandPosRef.current) {
         const distLeft = leftHandPosRef.current.distanceTo(vecZombie);
-        const speedLeft = hands?.leftVelocity ? hands.leftVelocity.length() : 0;
+        const cameraSpeedLeft = (hands?.leftVelocity && typeof hands.leftVelocity.length === 'function')
+          ? hands.leftVelocity.length()
+          : 0;
+        const worldSpeedLeft = worldSpeedLeftRef.current;
 
-        if (distLeft < 1.7 && (speedLeft > 1.2 || leftHandPosRef.current.z < playerPos.z - 0.5)) {
+        // Requires active motion (punching hand in camera OR pressing attack button)
+        // Enemies DO NOT take damage by simply touching/resting on the fist
+        const isSwingingLeft = cameraSpeedLeft > 0.55 || worldSpeedLeft > 1.0;
+
+        if (distLeft < 1.7 && isSwingingLeft) {
           if (now - lastAttackTime.current.left > 250) {
             lastAttackTime.current.left = now;
             shakeIntensity.current = 0.2;

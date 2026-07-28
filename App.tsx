@@ -221,6 +221,19 @@ export const App: React.FC = () => {
     selectUltraWideCamera
   } = useMediaPipe(videoRef);
 
+  // Effective hand positions ref for GameScene rendering and combat calculations
+  const effectiveHandPositionsRef = useRef<{
+    left: THREE.Vector3 | null;
+    right: THREE.Vector3 | null;
+    leftVelocity: THREE.Vector3 | null;
+    rightVelocity: THREE.Vector3 | null;
+  }>({
+    left: null,
+    right: null,
+    leftVelocity: null,
+    rightVelocity: null
+  });
+
   // Exit Room / Return to Menu
   const exitRoom = () => {
     setGameStatus(GameStatus.IDLE);
@@ -423,25 +436,25 @@ export const App: React.FC = () => {
       }
 
       // Check MediaPipe tracked hands
-      const mpHands = lastResultsRef.current;
-      const hasMpLeft = mpHands && mpHands.leftHandLandmarks && mpHands.leftHandLandmarks.length > 0;
-      const hasMpRight = mpHands && mpHands.rightHandLandmarks && mpHands.rightHandLandmarks.length > 0;
-
+      const rawHands = handPositionsRef.current;
       const shouldUseCameraHands = (controlMode === 'mobile') || (controlMode === 'xbox' && xboxAttackMode === 'camera');
 
-      handPositionsRef.current = {
-        left: (!hasMpLeft || !shouldUseCameraHands)
-          ? new THREE.Vector3(-0.22, -0.18, leftZ)
-          : handPositionsRef.current?.left,
-        right: (!hasMpRight || !shouldUseCameraHands)
-          ? new THREE.Vector3(0.22, -0.18, rightZ)
-          : handPositionsRef.current?.right,
-        leftVelocity: (!hasMpLeft || !shouldUseCameraHands)
-          ? new THREE.Vector3(0, 0, leftVelZ)
-          : handPositionsRef.current?.leftVelocity,
-        rightVelocity: (!hasMpRight || !shouldUseCameraHands)
-          ? new THREE.Vector3(0, 0, rightVelZ)
-          : handPositionsRef.current?.rightVelocity
+      const hasCameraLeft = shouldUseCameraHands && rawHands?.left != null;
+      const hasCameraRight = shouldUseCameraHands && rawHands?.right != null;
+
+      effectiveHandPositionsRef.current = {
+        left: hasCameraLeft
+          ? rawHands.left
+          : new THREE.Vector3(-0.22, -0.18, leftZ),
+        right: hasCameraRight
+          ? rawHands.right
+          : new THREE.Vector3(0.22, -0.18, rightZ),
+        leftVelocity: hasCameraLeft && rawHands?.leftVelocity
+          ? rawHands.leftVelocity
+          : new THREE.Vector3(0, 0, leftVelZ),
+        rightVelocity: hasCameraRight && rawHands?.rightVelocity
+          ? rawHands.rightVelocity
+          : new THREE.Vector3(0, 0, rightVelZ)
       };
 
       // 2. PC Mode WASD Locomotion (Camera View Synchronized)
@@ -1110,7 +1123,7 @@ export const App: React.FC = () => {
           <GameScene
             gameStatus={gameStatus}
             playerPos={playerPos}
-            handPositionsRef={handPositionsRef}
+            handPositionsRef={effectiveHandPositionsRef}
             cameraQuaternionRef={cameraQuaternionRef}
             isStereoVR={isStereoVR}
             zombies={zombies}
